@@ -1,6 +1,7 @@
 from ..roblox_py.transpiler import transpiler
 import os
 import json
+import time
 
 settings = {};
 
@@ -41,7 +42,9 @@ def get_settings():
     return settings;
 
 def transpile(folderOrigin: str, folderDestination: str):
-    transpilations = transpiler.transpileFolder(folderOrigin, folderDestination)
+    start_time = int(round(time.time() * 1000))
+
+    transpilations = transpiler.transpile_folder(folderOrigin, folderDestination)
 
     transpilation_results = transpilations["results"];
     transpilation_errors = transpilations["errors"];
@@ -51,8 +54,15 @@ def transpile(folderOrigin: str, folderDestination: str):
         for error in transpilation_errors:
             print(error)
         return
+    
+    empty = 0;
 
-    print("Successfully transpiled " + str(len(transpilation_results)) + " files");
+    for file in transpilation_results:
+        if transpilation_results[file] == "" or transpilation_results[file] == None:
+            empty += 1;
+            continue;
+
+    print("Successfully transpiled " + str(len(transpilation_results)) + " files (" + str(empty) + " of which were empty) in " + str(int(round(time.time() * 1000)) - start_time) + " ms");
 
 def main():
     settings = get_settings();
