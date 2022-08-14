@@ -1,66 +1,51 @@
-from unittest import result
+from tarfile import PAX_FORMAT
 from ..util import transpilation as transpilation_util;
 from ..util import strings as string_util;
 
 import os
-import re
 import ast
+import re
 
-def transpileFile(filePath: str) -> dict[str, str]:
+def get_ast_tree(file_path: str) -> dict[str, str]:
     result: any = None;
     error: str | None = None;
 
     # Try to read the file given to us
     try:
-        file = open(filePath);
+        file = open(file_path);
         result = file.read();
     except Exception as e:
-        error = filePath + " is not a valid path: " + str(e);
-    
+        error = file_path + " is not a valid path: " + str(e);
+
     # Get non-existent file out of the way
     if error != None: return { "error": error };
-
     # Get non-strings out of the way
+
     if not isinstance(result, str): return { "error": "File is valid" };
 
     # Try ast.parse(ast.unparse(result))
     try:
-        result = ast.parse(result);
-        result = ast.unparse(result);
+        parsed: ast.AST = ast.parse(result);
     except Exception as e:
         error = "Error parsing file: " + str(e);
 
+    result = transpilation_util.transpile_lines(parsed.body)
+
+    return { "result": result, "error": error };
+
+def transpile_file(file_path: str) -> dict[str, str]:
+    attempt = get_ast_tree(file_path);
+
     # Get errored file out of the way
-    if error != None: return { "error": error };
-
-    # Turn every ":" into a ":" plus whiteline
-    result = re.sub(r":", r":\n", result);
-
-    # Turn every ";" into a ";" plus whiteline
-    result = re.sub(r";", r";\n", result);
-
-    # Remove every double whiteline twice
-    result = re.sub(r"\n\n", r"\n", result);
-    result = re.sub(r"\n\n", r"\n", result);
-
-    # Split by whiteline
-    lines = result.split("\n");
-
-    # Remove every line that is not a string, has a length of 0, consists entirely of spaces or newlines
-    lines[:] = [x for x in lines if x.strip()]
-
-    # Deal with identation and replacing def with function, elif with else if
-    transpilation_util.deal_with_indentation(lines);
-
-    result = "--Transpiled with roblox-py" + "\n".join(lines)
+    if attempt["error"] != None: return attempt;
     
-    return { "result": result };
+    return { "result": attempt["result"] };
 
-def transpileFolder(folderOrigin: str, folderDestination: str) -> dict[str, str]:
+def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, str]:
     results = {};
     errors = {};
 
-    for root, dirs, files in os.walk(folderOrigin, topdown=False):
+    for root, dirs, files in os.walk(folder_origin, topdown=False):
         # Loop through directories and files
         for name in files:
             # Skip non-".py" files
@@ -70,7 +55,7 @@ def transpileFolder(folderOrigin: str, folderDestination: str) -> dict[str, str]
             fullName = os.path.join(root, name);
 
             # Transpile and add the result to result[name]
-            transpilation = transpileFile(fullName)
+            transpilation = transpile_file(fullName)
 
             if "error" in transpilation:
                 errors[fullName] = transpilation["error"];
@@ -79,20 +64,20 @@ def transpileFolder(folderOrigin: str, folderDestination: str) -> dict[str, str]
                 results[fullName] = transpilation["result"];
 
     # Empty the destination FOLDER
-    for root, dirs, files in os.walk(folderDestination, topdown=False):
+    for root, dirs, files in os.walk(folder_destination, topdown=False):
         for name in files:
             os.remove(os.path.join(root, name));
         for name in dirs:
             os.rmdir(os.path.join(root, name));
 
-    # Get folderDestination full name
-    folderDestinationFullName = os.path.join(os.getcwd(), folderDestination);
+    # Get folder_destination full name
+    folder_destination_full_name = os.path.join(os.getcwd(), folder_destination);
     
     # Create and write the results to the destination folder
     for fullName in results:
-        nameWithoutRoot = fullName.replace(folderOrigin + "\\", "");
+        name_without_root = fullName.replace(folder_origin + "\\", "");
 
-        newFileName = os.path.join(folderDestinationFullName, nameWithoutRoot)
+        newFileName = os.path.join(folder_destination_full_name, name_without_root)
 
         # Replace the last .py with .lua
         newFileName = string_util.replace_reverse(newFileName, ".py", ".lua", 1);
