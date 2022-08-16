@@ -29,7 +29,7 @@ def get_ast_tree(file_path: str) -> dict[str, str]:
     except Exception as e:
         error = "Error parsing file: " + str(e);
 
-    result = transpilation_util.transpile_lines(parsed.body)
+    result = transpilation_util.transpile_module(parsed);
 
     return { "result": result, "error": error };
 

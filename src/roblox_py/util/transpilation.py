@@ -1,29 +1,75 @@
 import ast
-from os import stat
+from typing_extensions import Self
 
 # Refer to:
 # https://docs.python.org/3/library/ast.html#abstract-grammar
 
-true = True
-false = False
+toggle_ast = False;
+toggle_line_of_code = False;
+toggle_block_ids = False;
 
-toggle_ast = true;
-toggle_line_of_code = false;
+# Keep track of every block
 
-def initialise_string(node: any) -> str:
-    return "--[[" + node.__class__.__name__ + "]]" if toggle_ast else "";
+class CodeBlock:
+    def __init__(self, block_id: str, type: str, variables: list[str], children: list[Self], parent: Self | None = None):
+        self.block_id: str = block_id;
+        self.type: str = type;
+        self.variables: str = variables;
+        self.children: list[Self] = children;
+        self.parent: Self | None = parent;
 
-def transpile_call(node: ast.Call):
-    result = initialise_string(node)
+    def get_function(self) -> Self:
+        if self.parent is None: return self;
 
-    result = result + transpile_expression(node.func);
+        ancestor = self.parent;
 
-    result = result + "(";
+        while ancestor.block_id != "0" and ancestor.type != "function":
+            ancestor = ancestor.parent
+
+        return ancestor;
+
+    def add_variable(self, variable: str) -> Self:
+        parent_function = self.get_function();
+
+        if variable in parent_function.variables: return False;
+
+        parent_function.variables.append(variable);
+        return True;
+
+    def add_child(self, type: str) -> Self: # Preferred over __init__
+        # New id is the self.block_id + "." + the next available int
+        new_id = self.block_id + "." + str(len(self.children));
+
+        # Create a new block
+        new_block = CodeBlock(new_id, type, [], [], self);
+
+        # Add the new block to the children of the current block
+        self.children.append(new_block);
+
+        return new_block;
+
+top_block = CodeBlock("0", "top", [], []);
+
+def initialise_string(node: any, block: CodeBlock) -> str:
+    result = "";
+
+    if toggle_ast:
+        result = result + "--[[" + node.__class__.__name__ + "]]"
+
+    if toggle_block_ids:
+        result = result + "--[[ BlockId: " + block["block_id"] + "]]";
+    
+    return result;
+
+def transpile_call(node: ast.Call, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + transpile_expression(node.func, block) + "(";
 
     # Loop through the arguments
     for i in range(0, len(node.args)):
         arg = node.args[i];
-        result = result + transpile_expression(arg);
+        result = result + transpile_expression(arg, block);
 
         if i != len(node.args) - 1:
             result = result + ", ";
@@ -32,44 +78,34 @@ def transpile_call(node: ast.Call):
             
     return result;
 
-def transpile_while(node: ast.While):
-    result = initialise_string(node)
+def transpile_while(node: ast.While, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
-    result = result + "while " + transpile_expression(node.test) + " do\n";
+    result = result + "while " + transpile_expression(node.test, block) + " do\n";
 
-    result = result + transpile_lines(node.body);
+    result = result + transpile_lines(node.body, block.add_child("while"));
 
     result = result + (node.col_offset) * " " + "end";
 
     return result;
 
-def transpile_if(node: ast.If):
-    result = initialise_string(node)
+def transpile_if(node: ast.If, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
-    result = result + "if " + transpile_expression(node.test) + " then\n";
+    result = result + "if " + transpile_expression(node.test, block) + " then\n";
 
-    result = result + transpile_lines(node.body);
+    result = result + transpile_lines(node.body, block.add_child("if"));
 
     result = result + (node.col_offset) * " " + "else\n";
 
-    result = result + transpile_lines(node.orelse);
+    result = result + transpile_lines(node.orelse, block.add_child("else"));
+
+    result = result + (node.col_offset) * " " + "end\n";
 
     return result;
 
-def transpile_boolop(node: ast.BoolOp):
-    result = initialise_string(node)
-
-    # Loop through the values
-    for i in range(0, len(node.values)):
-        value = node.values[i];
-        result = result + transpile_expression(value);
-        if i != len(node.values) - 1:
-            result = result + " " + transpile_expression(node.op);
-
-    return result;
-
-def transpile_function(node: ast.FunctionDef):
-    result = initialise_string(node)
+def transpile_function(node: ast.FunctionDef, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # Get the function name
     function_name = node.name;
@@ -85,42 +121,71 @@ def transpile_function(node: ast.FunctionDef):
 
     result = result + ")\n";
 
-    result = result + transpile_lines(node.body);
+    result = result + transpile_lines(node.body, block.add_child("function"));
     
     # Add end to the end of the function
     result = result + (node.col_offset-4) * " " + "end\n";
 
     return result;
 
-def transpile_return(node: ast.Return):
-    result = initialise_string(node)
+def transpile_boolop(node: ast.BoolOp, block: CodeBlock):
+    result = initialise_string(node, block);
 
-    result = result + "return " + transpile_expression(node.value);
+    # Loop through the values
+    for i in range(0, len(node.values)):
+        value = node.values[i];
+        result = result + transpile_expression(value);
+        if i != len(node.values) - 1:
+            result = result + " " + transpile_expression(node.op);
 
     return result;
 
-def transpile_assign(node: ast.Assign):
-    result = initialise_string(node)
+def transpile_return(node: ast.Return, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + "return " + transpile_expression(node.value, block);
+
+    return result;
+
+def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
+
+    result = initialise_string(node, block)
+
+    # Check if assignment is new (i.e check if we have to append "local" in front of the variable)
+
+    # Get targets as array
+    targets = [];
+    added = False;
+
+    for i in range(0, len(node.targets)):
+        node_target = node.targets[i]
+        target = transpile_expression(node_target, block)
+        targets.append(target);
+        
+        if not isinstance(node_target, ast.Name): continue;
+        if block.add_variable(target):
+            added = True;
+
+    if added:
+        result = result + "local ";
 
     # Assigns a variable to a value
 
     # Loop through the targets
-    for i in range(0, len(node.targets)):
-        target = node.targets[i];
-        result = result + transpile_expression(target);
+    for i in range(0, len(targets)):
+        target = targets[i];
+        result = result + target
         if i != len(node.targets) - 1:
             result = result + ", ";
 
     result = result + " = ";
 
-    result = result + transpile_expression(node.value);
+    result = result + transpile_expression(node.value, block);
 
     return result
 
-def transpile_listcomp(node: ast.ListComp):
-    result = initialise_string(node)
-
-    print()
+def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     result = result + "(function()\n";
 
@@ -129,20 +194,19 @@ def transpile_listcomp(node: ast.ListComp):
     # Loop through the generators
     for i in range(0, len(node.generators)):
         generator = node.generators[i];
-        target = transpile_expression(generator.target);
-        iter = transpile_expression(generator.iter);
-        print(target, iter)
+        target = transpile_expression(generator.target, block);
+        iter = transpile_expression(generator.iter, block);
         ifs = generator.ifs;
 
         result = result + (node.col_offset-4) * " " + "for k, " + target
         result = result + " in pairs(" + iter + ") do\n";
 
         if len(ifs) == 0:
-            result = result + (node.col_offset) * " " + "result[k] = " + transpile_expression(node.elt) + ";\n";
+            result = result + (node.col_offset) * " " + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
         else:
             for j in range(0, len(ifs)):
                 if_ = ifs[j];
-                result = result + (node.col_offset) * " " + "if " + transpile_expression(if_.test) + " then\n";
+                result = result + (node.col_offset) * " " + "if " + transpile_expression(if_.test, block) + " then\n";
                 result = result + (node.col_offset+4) * " " + "result[k] = " + target + ";\n";
                 result = result + (node.col_offset) * " " + "end\n";
             
@@ -154,51 +218,51 @@ def transpile_listcomp(node: ast.ListComp):
 
     return result;
 
-def transpile_for(node: ast.For):
-    result = initialise_string(node)
+def transpile_for(node: ast.For, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
-    result = result + transpile_lines(node.body);
+    result = result + "for " + transpile_expression(node.target, block) + " in " + transpile_expression(node.iter, block) + " do\n";
 
-    result = result + (node.col_offset-4) * " " + "end\n";
+    result = result + transpile_lines(node.body, block.add_child("for"));
+
+    result = result + (node.col_offset) * " " + "end\n";
 
     return result;
 
-def transpile_compare(node: ast.Compare):
-    result = initialise_string(node)
+def transpile_compare(node: ast.Compare, block: CodeBlock):
+    result = initialise_string(node, block)
 
     # Loop through the expressions
     for i in range(0, len(node.ops)):
         op = node.ops[i];
-
-        result = result + transpile_expression(node.left);
+        left = transpile_expression(node.left, block);
+        comparator = transpile_expression(node.comparators[i], block);
 
         if isinstance(op, ast.Eq):
-            result = result + " == ";
+            result = result + left + " == " + comparator;
         elif isinstance(op, ast.NotEq):
-            result = result + " ~= ";
+            result = result + left + " ~= " + comparator;
         elif isinstance(op, ast.Lt):
-            result = result + " < ";
+            result = result + left + " < " + comparator;
         elif isinstance(op, ast.LtE):
-            result = result + " <= ";
+            result = result + left + " <= " + comparator;
         elif isinstance(op, ast.Gt):
-            result = result + " > ";
+            result = result + left + " > " + comparator;
         elif isinstance(op, ast.GtE):
-            result = result + " >= ";
+            result = result + left + " >= " + comparator;
         elif isinstance(op, ast.Is):
-            result = result + " == ";
+            result = result + left + " == " + comparator; # Probably wrong
         elif isinstance(op, ast.IsNot):
-            result = result + " ~= ";
+            result = result + left + " ~= " + comparator; # Probably wrong
         elif isinstance(op, ast.In):
-            result = result + " in "; # Probably not valid Lua
+            result = result + "table.find("+comparator+"," + left+")"
         elif isinstance(op, ast.NotIn):
-            result = result + " not in "; # Probably not valid Lua
-        
-        result = result + transpile_expression(node.comparators[i]);
+            result = result + "not " + "table.find("+comparator+"," + left+")"
 
     return result;
 
-def transpile_unaryop(node: ast.UnaryOp):
-    result = initialise_string(node)
+def transpile_unaryop(node: ast.UnaryOp, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # Check the operator
     if isinstance(node.op, ast.UAdd):
@@ -214,20 +278,20 @@ def transpile_unaryop(node: ast.UnaryOp):
 
     return result;
 
-def transpile_list(node: ast.List):
-    result = initialise_string(node)
+def transpile_list(node: ast.List, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # Loop through the expressions
     for i in range(0, len(node.elts)):
         elt = node.elts[i];
-        result = result + transpile_expression(elt);
+        result = result + transpile_expression(elt, block);
         if i != len(node.elts) - 1:
             result = result + ", ";
 
     return result;
 
-def transpile_lamba(node: ast.Lambda):
-    result = initialise_string(node)
+def transpile_lamba(node: ast.Lambda, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # Header
     result = result + "function (";
@@ -240,49 +304,48 @@ def transpile_lamba(node: ast.Lambda):
             result = result + ", ";
 
     result = result + ")";
-    result = result + transpile_lines(node.body);
+    result = result + transpile_lines(node.body, block.add_child("lambda"));
 
     return result;
 
-def transpile_binop(node: ast.BinOp):
+def transpile_binop(node: ast.BinOp, block: CodeBlock) -> str:
     # BinOp(expr left, operator op, expr right)
-    result = initialise_string(node)
+    result = initialise_string(node, block)
     
-    result = result + transpile_expression(node.left);
+    result = result + transpile_expression(node.left, block);
 
-    result = result + transpile_operator(node.op);
+    result = result + transpile_operator(node.op, block);
 
-    result = result + transpile_expression(node.right);
-
-    return result;
-
-def transpile_yield(node: ast.Yield):
-    result = initialise_string(node)
-
-    result = result + "yield[#yield] = " + transpile_expression(node.value);
+    result = result + transpile_expression(node.right, block);
 
     return result;
 
-def transpile_subscript(node: ast.Subscript):
-    result = initialise_string(node)
+def transpile_yield(node: ast.Yield, block: CodeBlock):
+    result = initialise_string(node, block)
+
+    result = result + "yield[#yield] = " + transpile_expression(node.value, block);
+
+    return result;
+
+def transpile_subscript(node: ast.Subscript, block: CodeBlock):
+    result = initialise_string(node, block)
 
     # Build the subscript in lua {} notation
-    result = result + "{";
-    result = result + transpile_expression(node.value);
-    result = result + "}[";
-    result = result + transpile_expression(node.slice);
+    result = result + transpile_expression(node.value, block);
+    result = result + "[";
+    result = result + transpile_expression(node.slice, block);
     result = result + "]";
 
     return result;
 
-def transpile_delete(node: ast.Delete):
-    result = initialise_string(node)
+def transpile_delete(node: ast.Delete, block: CodeBlock):
+    result = initialise_string(node, block)
 
     # Loop through the targets and add " = nil" after it
     for i in range(0, len(node.targets)):
         target = node.targets[i];
 
-        result = result + transpile_expression(target);
+        result = result + transpile_expression(target, block);
 
         if i != len(node.targets) - 1:
             result = result + ", ";
@@ -291,30 +354,28 @@ def transpile_delete(node: ast.Delete):
 
     return result;
 
-def transpile_augassign(node: ast.AugAssign):
-    result = initialise_string(node)
+def transpile_augassign(node: ast.AugAssign, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # x += 1
     # x = x + 1
     # target = target op value
 
-    target = transpile_expression(node.target)
-    op = transpile_operator(node.op)
-    value = transpile_expression(node.value)
+    target = transpile_expression(node.target, block)
+    op = transpile_operator(node.op, block)
+    value = transpile_expression(node.value, block)
 
     result = target + " = " + target + " " + op + " " + value;
 
     return result;
 
-def transpile_comprehension(node: ast.comprehension):
-    result = initialise_string(node)
+def transpile_comprehension(node: ast.comprehension, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     # [i for i in p]
 
-    target = transpile_expression(node.target)
-    iter = transpile_expression(node.iter)
-
-    print(target, iter)
+    target = transpile_expression(node.target, block)
+    iter = transpile_expression(node.iter, block)
 
     result = result + "for "
     result = result + target
@@ -323,20 +384,20 @@ def transpile_comprehension(node: ast.comprehension):
 
     if len(node.ifs) > 0:
         result = result + " if "
-        result = result + transpile_expressions(node.ifs)
+        result = result + transpile_expressions(node.ifs, block)
 
     return result;
 
-def transpile_attribute(node: ast.Attribute):
-    result = initialise_string(node)
+def transpile_attribute(node: ast.Attribute, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
-    result = result + transpile_expression(node.value);
+    result = result + transpile_expression(node.value, block);
     result = result + "." + node.attr;
 
     return result;
 
-def transpile_dict(node: ast.Dict):
-    result = initialise_string(node)
+def transpile_dict(node: ast.Dict, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     result = result + "{";
 
@@ -354,29 +415,29 @@ def transpile_dict(node: ast.Dict):
 
     return result;
 
-def transpile_name(node: ast.Name):
-    result = initialise_string(node)
+def transpile_name(node: ast.Name, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     result = result + node.id;
 
     return result;
 
-def transpile_string(node: ast.Str):
-    result = initialise_string(node)
+def transpile_string(node: ast.Str, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     result = result + "\"" + node.s + "\"";
 
     return result;
 
-def transpile_set(node: ast.Set):
-    result = initialise_string(node)
+def transpile_set(node: ast.Set, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
 
     result = result + "{";
 
     # Loop through the expressions
     for i in range(0, len(node.elts)):
         elt = node.elts[i];
-        result = result + transpile_expression(elt);
+        result = result + transpile_expression(elt, block);
         if i != len(node.elts) - 1:
             result = result + ", ";
 
@@ -385,174 +446,201 @@ def transpile_set(node: ast.Set):
     return result;
 
 # Selector function
-def transpile_expression(expression: ast.Expr | ast.expr) -> str:
+def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> str:
     # BoolOp
     if isinstance(expression, ast.BoolOp):
-        return transpile_boolop(expression);
+        return transpile_boolop(expression, block);
 
-    # NamedExpr
+    # NamedExpr (probably needs to be a separate function)
     if isinstance(expression, ast.NamedExpr):
-        return expression.name + " = " + transpile_expression(expression.value);
+        return expression.name + " = " + transpile_expression(expression.value, block);
 
     # BinOp
     if isinstance(expression, ast.BinOp):
-        return transpile_binop(expression);
+        return transpile_binop(expression, block);
 
     # UnaryOp
     if isinstance(expression, ast.UnaryOp):
-        return transpile_unaryop(expression.op);
+        return transpile_unaryop(expression.op, block);
     
     # Lambda
     if isinstance(expression, ast.Lambda):
-        return transpile_lamba(expression);
+        return transpile_lamba(expression, block);
 
     # IfExp (should be a separate function)
     if isinstance(expression, ast.IfExp):
-        return transpile_expression(expression.test) + " ? " + transpile_expression(expression.body) + " : " + transpile_expression(expression.orelse);
+        return transpile_expression(expression.test, block) + " ? " + transpile_expression(expression.body, block) + " : " + transpile_expression(expression.orelse, block);
 
     # Dict (should be a separate function)
     if isinstance(expression, ast.Dict):
-        return transpile_dict(expression);
+        return transpile_dict(expression, block);
 
     # Set (should be a separate function)
     if isinstance(expression, ast.Set):
-        return transpile_set(expression);
+        return transpile_set(expression, block);
 
     # Await (what is the equivalent in lua?)
     if isinstance(expression, ast.Await):
-        return transpile_expression(expression.value);
+        return transpile_expression(expression.value, block);
 
     # Yield (what is the equivalent in lua?)
     if isinstance(expression, ast.Yield):
-        return transpile_yield(expression);
+        return transpile_yield(expression, block);
 
     # Subscript
     if isinstance(expression, ast.Subscript):
-        return transpile_subscript(expression);
+        return transpile_subscript(expression, block);
 
     # Compare
     if isinstance(expression, ast.Compare):
-        return transpile_compare(expression);
+        return transpile_compare(expression, block);
 
     # List
     if isinstance(expression, ast.List):
-        return transpile_list(expression);
+        return transpile_list(expression, block);
 
     # ListComp
     if isinstance(expression, ast.ListComp):
-        return transpile_listcomp(expression);
+        return transpile_listcomp(expression, block);
 
     # comprehension
     if isinstance(expression, ast.comprehension):
-        return transpile_comprehension(expression);
+        return transpile_comprehension(expression, block);
 
     # Attribute
     if isinstance(expression, ast.Attribute):
-        return transpile_attribute(expression);
+        return transpile_attribute(expression, block);
     
     # Call
     if isinstance(expression, ast.Call):
-        return transpile_call(expression);
+        return transpile_call(expression, block);
 
     # Name
     if isinstance(expression, ast.Name):
-        return transpile_name(expression);
+        return transpile_name(expression, block);
 
-    # Num
+    # Num (should be a separate function)
     if isinstance(expression, ast.Num):
         return str(expression.n);
 
     # Str
     if isinstance(expression, ast.Str):
-        return transpile_string(expression);
+        return transpile_string(expression, block);
 
-    if isinstance(expression, ast.UnaryOp):
-        return transpile_expression(expression.op) + " " + transpile_expression(expression.operand);
-
+    # Expr
     if isinstance(expression, ast.Expr):
-        return transpile_expression(expression.value);
+        return transpile_expression(expression.value, block);
 
     print("Warning: unknown expression " + expression.__class__.__name__);
     exit();
 
 # Selector function
-def transpile_statement(statement: ast.stmt | list[ast.stmt]) -> str:
+def transpile_statement(statement: ast.stmt | list[ast.stmt], block: CodeBlock) -> str:
     # If the statement is a FunctionDef
     if isinstance(statement, ast.FunctionDef):
-        return transpile_function(statement);
+        return transpile_function(statement, block);
 
     # If the statement is a If
     if isinstance(statement, ast.If):
-        return transpile_if(statement);
+        return transpile_if(statement, block);
 
     # Return
     if isinstance(statement, ast.Return):
-        return transpile_return(statement);
+        return transpile_return(statement, block);
 
     # Delete
     if isinstance(statement, ast.Delete):
-        return transpile_delete(statement);
+        return transpile_delete(statement, block);
 
     # While
     if isinstance(statement, ast.While):
-        return transpile_while(statement);
+        return transpile_while(statement, block);
 
     # Assign
     if isinstance(statement, ast.Assign):
-        return transpile_assign(statement);
+        return transpile_assign(statement, block);
 
     # AugAssign
     if isinstance(statement, ast.AugAssign):
-        return transpile_augassign(statement);
+        return transpile_augassign(statement, block);
 
     # For
     if isinstance(statement, ast.For):
-        return transpile_for(statement);
+        return transpile_for(statement, block);
+
+    # Expr
+    if isinstance(statement, ast.Expr):
+        return transpile_expression(statement.value, block);
 
     print("Warning: unknown statement " + statement.__class__.__name__)
     exit();
 
 # Selector function
-def transpile_operator(operator: ast.operator) -> str:
+def transpile_operator(operator: ast.operator, block: CodeBlock) -> str:
+    result = initialise_string(operator, block)
+
     # Check the operator
     if isinstance(operator, ast.Add):
-        return "+";
+        return result + "+";
 
     if isinstance(operator, ast.Sub):
-        return "-";
+        return result + "-";
 
     if isinstance(operator, ast.Mult):
-        return "*";
+        return result + "*";
 
     if isinstance(operator, ast.Div):
-        return "/";
+        return result + "/";
 
     if isinstance(operator, ast.Mod):
-        return "%";
+        return result + "%";
 
     if isinstance(operator, ast.Pow):
-        return "^";
+        return result + "^";
     
     print("Warning: Unknown operator " + operator.__class__.__name__);
     exit();
 
-def transpile_statements(statements: list[ast.stmt]) -> str:
+def transpile_statements(statements: list[ast.stmt], block: CodeBlock) -> str:
     result = "";
 
     for statement in statements:
-        result = result + transpile_statement(statement);
+        result = result + transpile_statement(statement, block);
 
     return result;
 
-def transpile_expressions(expressions: list[ast.expr]) -> str:
+def transpile_expressions(expressions: list[ast.expr], block: CodeBlock) -> str:
     result = "";
 
     for expression in expressions:
-        result = result + transpile_expression(expression);
+        result = result + transpile_expression(expression, block);
 
     return result;
 
-def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator]) -> str:
+# Selector function
+def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: CodeBlock) -> str:
+    # Check if statement or expression
+    result = "";
+
+    if isinstance(node, ast.Expr) or isinstance(node, ast.expr):
+        result = transpile_expression(node, block);
+
+    if isinstance(node, ast.stmt):
+        result = transpile_statement(node, block);
+
+    if isinstance(node, ast.operator):
+        result = transpile_operator(node, block);
+
+    if result == "":
+        print("Warning: unknown node " + node.__class__.__name__ + " which inherits from " + node.__class__.__bases__[0].__name__);
+        exit();
+
+    return (
+        node.col_offset * " " + result + 
+        ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n" )
+    );
+
+def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator], block: CodeBlock) -> str:
     # If statement is a list of statements/expressions
     result: str = "";
 
@@ -560,21 +648,15 @@ def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator]) -
         return result;
 
     for i in range(0, len(node)):
-        result = result + transpile_line(node[i]);
+        result = result + transpile_line(node[i], block);
 
     return result;
 
-# Selector function
-def transpile_line(node: ast.Expr | ast.expr | ast.stmt) -> str:
-    # Check if statement or expression
-    if isinstance(node, ast.Expr) or isinstance(node, ast.expr):
-        return node.col_offset * " " + transpile_expression(node) + ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n");
+def transpile_module(module: ast.Module) -> str:
+    global top_block
+    result = transpile_lines(module.body, top_block);
 
-    if isinstance(node, ast.stmt):
-        return node.col_offset * " " + transpile_statement(node)  + ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n");
+    # Reset top block
+    top_block = CodeBlock("0", "module", [], []);
 
-    if isinstance(node, ast.operator):
-        return node.col_offset * " " + transpile_operator(node)   + ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n");
-
-    print("Warning: unknown node " + node.__class__.__name__ + " which inherits from " + node.__class__.__bases__[0].__name__);
-    exit();
+    return result
