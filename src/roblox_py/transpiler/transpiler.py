@@ -1,10 +1,8 @@
-from tarfile import PAX_FORMAT
 from ..util import transpilation as transpilation_util;
 from ..util import strings as string_util;
 
 import os
 import ast
-import re
 
 def get_ast_tree(file_path: str) -> dict[str, str]:
     result: any = None;
@@ -101,13 +99,13 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
     # Get folder of script
     script_folder = os.path.dirname(script);
 
-    # Get helper_module.lua in script_folder
-    helper_module = os.path.join(script_folder, "helper_module.lua");
+    # Get ropy_module.lua in script_folder
+    ropy_module = os.path.join(script_folder, "ropy_module.lua");
 
-    # Clone helper_module.lua to module_folder
-    os.system("copy " + helper_module + " " + module_folder);
+    # Clone ropy_module.lua to module_folder
+    os.system("copy " + ropy_module + " " + module_folder);
 
-    # Rename helper_module.lua to ropy.lua
-    os.rename(os.path.join(module_folder, "helper_module.lua"), os.path.join(module_folder, "ropy.lua"));
+    # Rename ropy_module.lua to ropy.lua
+    os.rename(os.path.join(module_folder, "ropy_module.lua"), os.path.join(module_folder, "ropy.lua"));
 
     return {"results": results, "errors": errors};

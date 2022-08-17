@@ -11,8 +11,12 @@ toggle_block_ids = False;
 # Keep track of every block
 
 builtin_attribute_functions = {
-    "setdefault": "ropy.setdefault", # We need to probably make sure this is only valid in dict/list context
-    "append": "ropy.append",	# We need to probably make sure this is only valid in list context
+    "setdefault": "ropy.setdefault",    # We need make sure this is only valid in dict/list context
+    "append": "ropy.append",	        # We need make sure this is only valid in list context
+}
+
+built_in_functions = {
+    "len": "ropy.len",		            # OK
 }
 
 class CodeBlock:
@@ -92,7 +96,20 @@ def initialise_string(node: any, block: CodeBlock) -> str:
 def transpile_call(node: ast.Call, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    if isinstance(node.func, ast.Attribute) and node.func.attr in builtin_attribute_functions:
+    if isinstance(node.func, ast.Name) and node.func.id in built_in_functions:
+        func_name = node.func.id;
+        result = result + built_in_functions[func_name];
+        result = result + "(";
+
+        # Loop through the arguments
+        for i in range(0, len(node.args)):
+            arg = node.args[i];
+            result = result + transpile_expression(arg, block);
+
+            if i != len(node.args) - 1:
+                result = result + ", ";
+
+    elif isinstance(node.func, ast.Attribute) and node.func.attr in builtin_attribute_functions:
         func_name = node.func.attr;
 
         result = result + builtin_attribute_functions[func_name];
@@ -292,7 +309,7 @@ def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
 def transpile_for(node: ast.For, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    result = result + "for " + transpile_expression(node.target, block) + " in " + transpile_expression(node.iter, block) + " do\n";
+    result = result + "for _," + transpile_expression(node.target, block) + " in " + transpile_expression(node.iter, block) + " do\n";
 
     for_block = block.add_child("for")
 
