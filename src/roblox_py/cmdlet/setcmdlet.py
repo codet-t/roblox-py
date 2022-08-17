@@ -3,5 +3,6 @@ import os
 def set():
     loc = os.getcwd();
     path = loc + "src\\roblox-py\\ttranspiler\\main.py";
+    return path;
 
 # Figure this out later

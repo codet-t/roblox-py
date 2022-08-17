@@ -1,10 +1,8 @@
-from tarfile import PAX_FORMAT
 from ..util import transpilation as transpilation_util;
 from ..util import strings as string_util;
 
 import os
 import ast
-import re
 
 def get_ast_tree(file_path: str) -> dict[str, str]:
     result: any = None;
@@ -29,7 +27,7 @@ def get_ast_tree(file_path: str) -> dict[str, str]:
     except Exception as e:
         error = "Error parsing file: " + str(e);
 
-    result = transpilation_util.transpile_lines(parsed.body)
+    result = transpilation_util.transpile_module(parsed);
 
     return { "result": result, "error": error };
 
@@ -52,16 +50,16 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
             if not name.endswith(".py"): continue;
             
             # Get full name
-            fullName = os.path.join(root, name);
+            full_name = os.path.join(root, name);
 
             # Transpile and add the result to result[name]
-            transpilation = transpile_file(fullName)
+            transpilation = transpile_file(full_name)
 
             if "error" in transpilation:
-                errors[fullName] = transpilation["error"];
+                errors[full_name] = transpilation["error"];
 
             if "result" in transpilation:
-                results[fullName] = transpilation["result"];
+                results[full_name] = transpilation["result"];
 
     # Empty the destination FOLDER
     for root, dirs, files in os.walk(folder_destination, topdown=False):
@@ -72,18 +70,42 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
 
     # Get folder_destination full name
     folder_destination_full_name = os.path.join(os.getcwd(), folder_destination);
+
+    module_folder = "";
     
     # Create and write the results to the destination folder
-    for fullName in results:
-        name_without_root = fullName.replace(folder_origin + "\\", "");
+    for full_name in results:
+        name_without_root = full_name.replace(folder_origin + "\\", "");
 
-        newFileName = os.path.join(folder_destination_full_name, name_without_root)
+        new_file_name = os.path.join(folder_destination_full_name, name_without_root)
 
         # Replace the last .py with .lua
-        newFileName = string_util.replace_reverse(newFileName, ".py", ".lua", 1);
+        new_file_name = string_util.replace_reverse(new_file_name, ".py", ".lua", 1);
 
-        os.makedirs(os.path.dirname(newFileName), exist_ok=True)
-        with open(newFileName, "w") as f:
-            f.write(results[fullName])
+        os.makedirs(os.path.dirname(new_file_name), exist_ok=True)
+        with open(new_file_name, "w") as f:
+            f.write(results[full_name])
+    
+        # Check if file_path ends in either .client.py or .server.py
+    
+        if (new_file_name.endswith(".lua") and 
+        not new_file_name.endswith(".client.lua") and
+        not new_file_name.endswith(".server.lua")):
+            module_folder = os.path.dirname(new_file_name);
+    
+    # Get folder of this script
+    script = os.path.dirname(os.path.realpath(__file__));
+    
+    # Get folder of script
+    script_folder = os.path.dirname(script);
+
+    # Get ropy_module.lua in script_folder
+    ropy_module = os.path.join(script_folder, "ropy_module.lua");
+
+    # Clone ropy_module.lua to module_folder
+    os.system("copy " + ropy_module + " " + module_folder);
+
+    # Rename ropy_module.lua to ropy.lua
+    os.rename(os.path.join(module_folder, "ropy_module.lua"), os.path.join(module_folder, "ropy.lua"));
 
     return {"results": results, "errors": errors};
