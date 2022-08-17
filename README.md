@@ -2,7 +2,7 @@
 [![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/codetariat/roblox-py.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/codetariat/roblox-py/context:python)
 
 # roblox-py
-Python to Luau transpiler. Please note that before this project was created, I had never used Python nor do I have any experience with transpiling programming languages and this is just a fun side project for me so please don't mind shoddy code.
+Python to Luau compiler. Please note that before this project was created, I had never used Python nor do I have any experience with compiling programming languages and this is just a fun side project for me so please don't mind shoddy code.
 
 ## Work in progress
 This is a work in progress and is currently in an unusable state.
@@ -42,7 +42,7 @@ You will need to comply with Rojo's structure so you need to make a ropy folder 
 
 In the server and client folders make sure the extensions are actually ".server.py" and ".client.py" as Rojo translates these to Script and LocalScript objects respectively in Roblox Studio. For ModuleScripts there's no extension necessary.
 
-Your structure will look like this upon transpilation (only ropy and src folders are shown):
+Your structure will look like this upon compilation (only ropy and src folders are shown):
 
 ```
 ropy
@@ -62,7 +62,7 @@ src
     └── main.lua
 ```
 
-### Transpilation
+### Compilation
 
 Inside the directory you can run the following command:
 

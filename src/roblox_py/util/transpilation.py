@@ -10,6 +10,11 @@ toggle_block_ids = False;
 
 # Keep track of every block
 
+builtin_attribute_functions = {
+    "setdefault": "ropy.setdefault", # We need to probably make sure this is only valid in dict/list context
+    "append": "ropy.append",	# We need to probably make sure this is only valid in list context
+}
+
 class CodeBlock:
     def __init__(self, block_id: str, type: str, variables: list[str], children: list[Self], parent: Self | None = None):
         self.block_id: str = block_id;
@@ -17,9 +22,13 @@ class CodeBlock:
         self.variables: str = variables;
         self.children: list[Self] = children;
         self.parent: Self | None = parent;
+        self.line: str = "";
+        self.deep_variables: list[str] = [];
 
     def get_function(self) -> Self:
         if self.parent is None: return self;
+
+        if self.type == "function": return self;
 
         ancestor = self.parent;
 
@@ -28,13 +37,17 @@ class CodeBlock:
 
         return ancestor;
 
-    def add_variable(self, variable: str) -> Self:
-        parent_function = self.get_function();
+    def add_variable(self, variable: str) -> None | str: # "surface" | "deep"
+        function_block = self.get_function();
+        
+        if variable in function_block.variables or variable in function_block.deep_variables: return None;
 
-        if variable in parent_function.variables: return False;
-
-        parent_function.variables.append(variable);
-        return True;
+        if function_block == self:
+            function_block.variables.append(variable);
+            return "surface"
+        else:
+            function_block.deep_variables.append(variable);
+            return "deep"
 
     def add_child(self, type: str) -> Self: # Preferred over __init__
         # New id is the self.block_id + "." + the next available int
@@ -47,6 +60,21 @@ class CodeBlock:
         self.children.append(new_block);
 
         return new_block;
+    
+    def get_offset(self, relative_offset: int = 0) -> str:
+        # Get amount of periods in the block_id
+        # Multiply " " by this amount
+        level = len(self.block_id.split(".")) - 1 + relative_offset
+
+        # kirby = ["(>'-')>","<('-'<)","^('-')^","v('-')v","(>'-')>","(^-^)"]; 
+        # return "--[[" + " ".join(kirby[i % len(kirby)] for i in range(level)) + "]]"
+        
+        spaces = 1;
+        char = "\t";
+
+        offset = level * spaces * char;
+
+        return offset
 
 top_block = CodeBlock("0", "top", [], []);
 
@@ -64,16 +92,34 @@ def initialise_string(node: any, block: CodeBlock) -> str:
 def transpile_call(node: ast.Call, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    result = result + transpile_expression(node.func, block) + "(";
+    if isinstance(node.func, ast.Attribute) and node.func.attr in builtin_attribute_functions:
+        func_name = node.func.attr;
 
-    # Loop through the arguments
-    for i in range(0, len(node.args)):
-        arg = node.args[i];
-        result = result + transpile_expression(arg, block);
+        result = result + builtin_attribute_functions[func_name];
+        result = result + "(" + transpile_expression(node.func.value, block);
 
-        if i != len(node.args) - 1:
+        if len(node.args) > 0:
             result = result + ", ";
-    
+
+        # Loop through the arguments
+        for i in range(0, len(node.args)):
+            arg = node.args[i];
+            result = result + transpile_expression(arg, block);
+
+            if i != len(node.args) - 1:
+                result = result + ", ";
+    else:
+        transpiled_func = transpile_expression(node.func, block)
+        result = result + transpiled_func + "(";
+
+        # Loop through the arguments
+        for i in range(0, len(node.args)):
+            arg = node.args[i];
+            result = result + transpile_expression(arg, block);
+
+            if i != len(node.args) - 1:
+                result = result + ", ";
+        
     result = result + ")";
             
     return result;
@@ -85,7 +131,7 @@ def transpile_while(node: ast.While, block: CodeBlock) -> str:
 
     result = result + transpile_lines(node.body, block.add_child("while"));
 
-    result = result + (node.col_offset) * " " + "end";
+    result = result + block.get_offset() + "end";
 
     return result;
 
@@ -96,11 +142,11 @@ def transpile_if(node: ast.If, block: CodeBlock) -> str:
 
     result = result + transpile_lines(node.body, block.add_child("if"));
 
-    result = result + (node.col_offset) * " " + "else\n";
+    result = result + block.get_offset() + "else\n";
 
     result = result + transpile_lines(node.orelse, block.add_child("else"));
 
-    result = result + (node.col_offset) * " " + "end\n";
+    result = result + block.get_offset() + "end\n";
 
     return result;
 
@@ -119,12 +165,38 @@ def transpile_function(node: ast.FunctionDef, block: CodeBlock) -> str:
         if i != len(node.args.args) - 1:
             result = result + ", ";
 
-    result = result + ")\n";
+    result = result + ")";
 
-    result = result + transpile_lines(node.body, block.add_child("function"));
-    
+    header_length = len(result)
+
+    result = result + "\n";
+
+    new_function_block = block.add_child("function")
+
+    result = result + transpile_lines(node.body, new_function_block);
+
+    init: bool = False;
+
+    has_yield = False;
+
+    # Insert \nlocal variable declarations after header_length characters
+    for variable in new_function_block.deep_variables:
+        header = result[:header_length] + "\n"
+
+        assigned_to = "nil";
+
+        if variable == "yield":
+            has_yield = True;
+            assigned_to = "{}";
+        
+        result = header + new_function_block.get_offset() + "local " + variable + " = " + assigned_to + ";" + result[header_length:]
+
+    # If has_yield, return yield
+    if has_yield:
+        result = result + new_function_block.get_offset() + "return yield\n";
+
     # Add end to the end of the function
-    result = result + (node.col_offset-4) * " " + "end\n";
+    result = result + block.get_offset(-1) + "end\n";
 
     return result;
 
@@ -155,7 +227,7 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
 
     # Get targets as array
     targets = [];
-    added = False;
+    added: str = None # None | "surface" | "deep"
 
     for i in range(0, len(node.targets)):
         node_target = node.targets[i]
@@ -163,10 +235,9 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
         targets.append(target);
         
         if not isinstance(node_target, ast.Name): continue;
-        if block.add_variable(target):
-            added = True;
+        added = block.add_variable(target)
 
-    if added:
+    if added == "surface":
         result = result + "local ";
 
     # Assigns a variable to a value
@@ -189,7 +260,7 @@ def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
 
     result = result + "(function()\n";
 
-    result = result + (node.col_offset-4) * " " + "local result = {};\n";
+    result = result + block.get_offset(1) + "local result = {};\n";
 
     # Loop through the generators
     for i in range(0, len(node.generators)):
@@ -198,23 +269,23 @@ def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
         iter = transpile_expression(generator.iter, block);
         ifs = generator.ifs;
 
-        result = result + (node.col_offset-4) * " " + "for k, " + target
+        result = result + block.get_offset(1) + "for k, " + target
         result = result + " in pairs(" + iter + ") do\n";
 
         if len(ifs) == 0:
-            result = result + (node.col_offset) * " " + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
+            result = result + block.get_offset(2) + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
         else:
             for j in range(0, len(ifs)):
                 if_ = ifs[j];
-                result = result + (node.col_offset) * " " + "if " + transpile_expression(if_.test, block) + " then\n";
-                result = result + (node.col_offset+4) * " " + "result[k] = " + target + ";\n";
-                result = result + (node.col_offset) * " " + "end\n";
+                result = result + block.get_offset(2) + "if " + transpile_expression(if_.test, block) + " then\n";
+                result = result + block.get_offset(3)  + "result[k] = " + target + ";\n";
+                result = result + block.get_offset(2) + "end\n";
             
-        result = result + (node.col_offset-4) * " " + "end\n";
+        result = result + block.get_offset(2) + "end\n";
 
-    result = result + (node.col_offset-4) * " " + "return result;\n";
+    result = result + block.get_offset(1) + "return result;\n";
 
-    result = result + (node.col_offset-8) * " " + "end)\n";
+    result = result + block.get_offset(-1) + "end)()\n";
 
     return result;
 
@@ -223,9 +294,11 @@ def transpile_for(node: ast.For, block: CodeBlock) -> str:
 
     result = result + "for " + transpile_expression(node.target, block) + " in " + transpile_expression(node.iter, block) + " do\n";
 
-    result = result + transpile_lines(node.body, block.add_child("for"));
+    for_block = block.add_child("for")
 
-    result = result + (node.col_offset) * " " + "end\n";
+    result = result + transpile_lines(node.body, for_block);
+
+    result = result + for_block.get_offset(-1) + "end\n";
 
     return result;
 
@@ -255,9 +328,11 @@ def transpile_compare(node: ast.Compare, block: CodeBlock):
         elif isinstance(op, ast.IsNot):
             result = result + left + " ~= " + comparator; # Probably wrong
         elif isinstance(op, ast.In):
-            result = result + "table.find("+comparator+"," + left+")"
+            # ropy.operator_in(left, comparator)
+            result = result + "ropy.operator_in(" + left + ", " + comparator + ")";
         elif isinstance(op, ast.NotIn):
-            result = result + "not " + "table.find("+comparator+"," + left+")"
+            # not ropy.operator_in(left, comparator)
+            result = result + "not ropy.operator_in(" + left + ", " + comparator + ")";
 
     return result;
 
@@ -281,12 +356,16 @@ def transpile_unaryop(node: ast.UnaryOp, block: CodeBlock) -> str:
 def transpile_list(node: ast.List, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
+    result = result + "{";
+
     # Loop through the expressions
     for i in range(0, len(node.elts)):
         elt = node.elts[i];
         result = result + transpile_expression(elt, block);
         if i != len(node.elts) - 1:
             result = result + ", ";
+
+    result = result + "}";
 
     return result;
 
@@ -323,7 +402,9 @@ def transpile_binop(node: ast.BinOp, block: CodeBlock) -> str:
 def transpile_yield(node: ast.Yield, block: CodeBlock):
     result = initialise_string(node, block)
 
-    result = result + "yield[#yield] = " + transpile_expression(node.value, block);
+    block.add_variable("yield");
+
+    result = result + "yield[#yield+1] = " + transpile_expression(node.value, block);
 
     return result;
 
@@ -636,7 +717,7 @@ def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: CodeBlock) -> st
         exit();
 
     return (
-        node.col_offset * " " + result + 
+        block.get_offset() + result + 
         ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n" )
     );
 
@@ -654,7 +735,8 @@ def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator], b
 
 def transpile_module(module: ast.Module) -> str:
     global top_block
-    result = transpile_lines(module.body, top_block);
+    result = 'local ropy = require(game:FindFirstChild("ropy", true))\n\n';
+    result = result + transpile_lines(module.body, top_block);
 
     # Reset top block
     top_block = CodeBlock("0", "module", [], []);
