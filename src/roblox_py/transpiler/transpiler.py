@@ -21,7 +21,7 @@ def get_ast_tree(file_path: str) -> dict[str, str]:
 
     if not isinstance(result, str): return { "error": "File is valid" };
 
-    # Try ast.parse(ast.unparse(result))
+# Try ast.parse(ast.unparse(result))
     try:
         parsed: ast.AST = ast.parse(result);
     except Exception as e:

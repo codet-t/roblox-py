@@ -1,4 +1,5 @@
 import ast
+import re
 from typing_extensions import Self
 
 # Refer to:
@@ -11,12 +12,27 @@ toggle_block_ids = False;
 # Keep track of every block
 
 builtin_attribute_functions = {
-    "setdefault": "ropy.setdefault",    # We need make sure this is only valid in dict/list context
-    "append": "ropy.append",	        # We need make sure this is only valid in list context
+    "List": {
+        "append": "ropy.append.list"
+    },
+
+    "Dict": {
+        "setdefault": "ropy.setdefault.dict",
+    },
+
+    "Set": {
+        "add": "ropy.add.set",
+    }
 }
 
-built_in_functions = {
+builtin_functions = {
     "len": "ropy.len",		            # OK
+    "help": "",                         # OK
+    "range": "ropy.range",	            # OK
+    "discriminate_tables": {
+        "set": "ropy.set",		        # OK
+        "all": "ropy.all",		        # OK
+    }
 }
 
 class CodeBlock:
@@ -28,6 +44,7 @@ class CodeBlock:
         self.parent: Self | None = parent;
         self.line: str = "";
         self.deep_variables: list[str] = [];
+        self.node: ast.FunctionDef = "";
 
     def get_function(self) -> Self:
         if self.parent is None: return self;
@@ -53,12 +70,15 @@ class CodeBlock:
             function_block.deep_variables.append(variable);
             return "deep"
 
-    def add_child(self, type: str) -> Self: # Preferred over __init__
+    def add_child(self, type: str, node: ast.FunctionDef | None = None) -> Self: # Preferred over __init__
         # New id is the self.block_id + "." + the next available int
         new_id = self.block_id + "." + str(len(self.children));
 
         # Create a new block
         new_block = CodeBlock(new_id, type, [], [], self);
+
+        # If node is not None, set the node of the block
+        if node is not None: new_block.node = node;
 
         # Add the new block to the children of the current block
         self.children.append(new_block);
@@ -82,6 +102,14 @@ class CodeBlock:
 
 top_block = CodeBlock("0", "top", [], []);
 
+def get_function_block_by_name(name: str, within_block: CodeBlock) -> CodeBlock:
+    # Loop through children of within_block, find the function with the same name
+    for child in within_block.children:
+        if child.type == "function" and child.node.name == name:
+            return child;
+    
+    return None;
+
 def initialise_string(node: any, block: CodeBlock) -> str:
     result = "";
 
@@ -93,39 +121,76 @@ def initialise_string(node: any, block: CodeBlock) -> str:
     
     return result;
 
+def process_builtin_attribute_function(node: ast.Call, block: CodeBlock) -> str | None:
+    # If I knew how to obtain the attributee node from the given node, I could do this
+    # builtin_list = builtin_attribute_functions;
+    # nodeType = "";
+    # b = node.func.value;
+    # print(isinstance(b, ast.Dict), isinstance(b, ast.Set), isinstance(b, ast.List), isinstance(b, ast.Tuple))
+    # if isinstance(node.func, ast.Dict):
+    #     builtin_list = builtin_attribute_functions["Dict"];
+    #     nodeType = "Dict";
+    # elif isinstance(node.func, ast.Set):
+    #     builtin_list = builtin_attribute_functions["Set"];
+    #     nodeType = "Set";
+    # elif isinstance(node.func, ast.List):
+    #     builtin_list = builtin_attribute_functions["List"];
+    #     nodeType = "List";
+    # elif isinstance(node.func, ast.Tuple):
+    #     builtin_list = builtin_attribute_functions["Tuple"];
+    #     nodeType = "Tuple";
+    # else:
+    #     return None;
+
+    # print(node.func.attr)
+
+    # if not node.func.attr in builtin_list:
+    #     return None;
+
+    # result = builtin_list[node.func.attr];
+
+    nodeType = ""
+    
+    # Loop through builtin_attribute_functions to find the correct function
+    for key in builtin_attribute_functions:
+        if node.func.attr in builtin_attribute_functions[key]:
+            nodeType = key;
+            break;
+    
+    if nodeType == "": return None;
+
+    
+    result = builtin_attribute_functions[nodeType][node.func.attr];
+
+    result = result + "(" + transpile_expression(node.func.value, block);
+
+    if len(node.args) > 0:
+        result = result + ", "
+        # Loop through the args
+        for i in range(0, len(node.args)):
+                arg: ast.expr = node.args[i];
+                result = result + transpile_expression(arg, block);
+
+                if i != len(node.args) - 1:
+                    result = result + ", ";
+
+    result = result + ")";
+
+    return result;
+
 def transpile_call(node: ast.Call, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    if isinstance(node.func, ast.Name) and node.func.id in built_in_functions:
-        func_name = node.func.id;
-        result = result + built_in_functions[func_name];
-        result = result + "(";
+    if isinstance(node.func, ast.Attribute):
+        p = process_builtin_attribute_function(node, block);
+        if p is not None:
+            result = result + p;
+            return result;
 
-        # Loop through the arguments
-        for i in range(0, len(node.args)):
-            arg = node.args[i];
-            result = result + transpile_expression(arg, block);
+    builtin: bool = (node.func.id in builtin_functions) or (node.func.id in builtin_functions["discriminate_tables"])
 
-            if i != len(node.args) - 1:
-                result = result + ", ";
-
-    elif isinstance(node.func, ast.Attribute) and node.func.attr in builtin_attribute_functions:
-        func_name = node.func.attr;
-
-        result = result + builtin_attribute_functions[func_name];
-        result = result + "(" + transpile_expression(node.func.value, block);
-
-        if len(node.args) > 0:
-            result = result + ", ";
-
-        # Loop through the arguments
-        for i in range(0, len(node.args)):
-            arg = node.args[i];
-            result = result + transpile_expression(arg, block);
-
-            if i != len(node.args) - 1:
-                result = result + ", ";
-    else:
+    # if not built-in:
+    if not (isinstance(node.func, ast.Name) and not isinstance(node.func, ast.Attribute) and (builtin)):
         transpiled_func = transpile_expression(node.func, block)
         result = result + transpiled_func + "(";
 
@@ -137,7 +202,56 @@ def transpile_call(node: ast.Call, block: CodeBlock) -> str:
             if i != len(node.args) - 1:
                 result = result + ", ";
         
-    result = result + ")";
+        result = result + ")";
+
+        return result;
+        
+    func_name = node.func.id;
+
+    if func_name == "help":
+        # Reformulate help(function) to function([_,_,_,... (depending on #args) ],"help")
+        func = node.args[0];
+        # Get actual function from func (so we can get args length)
+        func = get_function_block_by_name(func.id, block).node
+        # Get amount of possible parameters
+        num_args = len(func.args.args);
+
+        result = result + func_name + "(" + ", ".join(["nil"]) * num_args + ",\"help\"";
+
+        # Replace only first instance of "help" with func.name
+        result = result.replace("help", func.name, 1);
+
+        result = result + ")";
+    elif func_name in builtin_functions["discriminate_tables"]:
+        new_name = builtin_functions["discriminate_tables"][func_name];
+        if len(node.args) == 0:
+            result = result + new_name + ".list()";
+        elif isinstance(node.args[0], ast.Dict):
+            result = result + new_name + ".dict(" + transpile_expression(node.args[0], block) + ")";
+        elif isinstance(node.args[0], ast.Set):
+            result = result + new_name + ".set(" + transpile_expression(node.args[0], block) + ")";
+        elif isinstance(node.args[0], ast.List):
+            result = result + new_name + ".list(" + transpile_expression(node.args[0], block) + ")";
+        elif isinstance(node.args[0], ast.Tuple):
+            result = result + new_name + ".tuple(" + transpile_expression(node.args[0], block) + ")";
+        elif isinstance(node.args[0], ast.GeneratorExp):
+            result = result + new_name + ".tuple(" + transpile_expression(node.args[0], block) + ")";
+        else:
+            result = result + new_name + ".tuple(" + transpile_expression(node.args[0], block) + ")";
+    else:
+        result = result + builtin_functions[func_name];
+        result = result + "(";
+        # Loop through the arguments
+        for i in range(0, len(node.args)):
+        
+        
+            arg = node.args[i];
+            result = result + transpile_expression(arg, block);
+
+            if i != len(node.args) - 1:
+                result = result + ", ";
+
+        result = result + ")";        
             
     return result;
 
@@ -155,13 +269,18 @@ def transpile_while(node: ast.While, block: CodeBlock) -> str:
 def transpile_if(node: ast.If, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    result = result + "if " + transpile_expression(node.test, block) + " then\n";
+    if_line = "if " + transpile_expression(node.test, block);
+
+    result = result + if_line;
+    
+    result = result + " then\n";
 
     result = result + transpile_lines(node.body, block.add_child("if"));
 
-    result = result + block.get_offset() + "else\n";
+    if len(node.orelse) > 0:
+        result = result + block.get_offset() + "else\n";
 
-    result = result + transpile_lines(node.orelse, block.add_child("else"));
+        result = result + transpile_lines(node.orelse, block.add_child("else"));
 
     result = result + block.get_offset() + "end\n";
 
@@ -184,15 +303,38 @@ def transpile_function(node: ast.FunctionDef, block: CodeBlock) -> str:
 
     result = result + ")";
 
-    header_length = len(result)
+    new_function_block = block.add_child("function", node);
 
+    transpiled_body = transpile_lines(node.body, new_function_block);
+
+    # Get first line of result
+    first_line = transpiled_body.split("\n")[0];
+    # Remove every character that resides between --[[ and ]] (ie remove comments)
+    first_line = re.sub('--\[\[[^>]+\]]', '', first_line)
+    # Remove every character that comes after -- (ie remove comments)
+    first_line = re.sub('--.*', '', first_line)
+    # Strip first line
+    first_line = first_line.strip()
+
+    # If this line is entirely surrounded by " or ', (i.e it is a string) then it's a help string
+    if first_line.startswith('"') and first_line.endswith('"') or first_line.startswith("'") and first_line.endswith("'"):
+        help_string = first_line;
+        new_help_string = new_function_block.get_offset() + "if _ropy_help == \"help\" then return " + help_string + " end\n";
+        # Remove the help_string from transpiled_body
+        transpiled_body = transpiled_body.replace(help_string, "");
+
+        # Add a parameter to the function (i.e replace the last ")" in result with ", _ropy_help)", in case there's =>1 args
+        if len(node.args.args) > 0:
+            result = result[:-1] + ", _ropy_help)";
+        else:
+            result = result + "_ropy_help)";
+        
+        result = result + "\n" + new_help_string
+
+    header_length = len(result)
     result = result + "\n";
 
-    new_function_block = block.add_child("function")
-
-    result = result + transpile_lines(node.body, new_function_block);
-
-    init: bool = False;
+    result = result + transpiled_body
 
     has_yield = False;
 
@@ -302,9 +444,44 @@ def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
 
     result = result + block.get_offset(1) + "return result;\n";
 
-    result = result + block.get_offset(-1) + "end)()\n";
+    result = result + block.get_offset(-1) + "end)()";
 
     return result;
+
+def transpile_generatorexp(node: ast.GeneratorExp, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + "(function()\n";
+
+    result = result + block.get_offset(1) + "local result = {};\n";
+
+    # Loop through the generators
+    for i in range(0, len(node.generators)):
+        generator = node.generators[i];
+        target = transpile_expression(generator.target, block);
+        iter = transpile_expression(generator.iter, block);
+        ifs = generator.ifs;
+
+        result = result + block.get_offset(1) + "for k, " + target
+        result = result + " in pairs(" + iter + ") do\n";
+
+        if len(ifs) == 0:
+            result = result + block.get_offset(2) + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
+        else:
+            for j in range(0, len(ifs)):
+                if_ = ifs[j];
+                result = result + block.get_offset(2) + "if " + transpile_expression(if_.test, block) + " then\n";
+                result = result + block.get_offset(3)  + "result[k] = " + target + ";\n";
+                result = result + block.get_offset(2) + "end\n";
+
+        result = result + block.get_offset(2) + "end\n";
+
+    result = result + block.get_offset(1) + "return result;\n";
+
+    result = result + block.get_offset() + "end)()";
+
+    return result;
+
 
 def transpile_for(node: ast.For, block: CodeBlock) -> str:
     result = initialise_string(node, block)
@@ -467,25 +644,6 @@ def transpile_augassign(node: ast.AugAssign, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_comprehension(node: ast.comprehension, block: CodeBlock) -> str:
-    result = initialise_string(node, block)
-
-    # [i for i in p]
-
-    target = transpile_expression(node.target, block)
-    iter = transpile_expression(node.iter, block)
-
-    result = result + "for "
-    result = result + target
-    result = result + " in "
-    result = result + iter
-
-    if len(node.ifs) > 0:
-        result = result + " if "
-        result = result + transpile_expressions(node.ifs, block)
-
-    return result;
-
 def transpile_attribute(node: ast.Attribute, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
@@ -540,6 +698,14 @@ def transpile_set(node: ast.Set, block: CodeBlock) -> str:
             result = result + ", ";
 
     result = result + "}";
+
+    return result;
+
+def transpile_starred(node: ast.Starred, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + "--[[*]]";
+    result = result + transpile_expression(node.value, block);
 
     return result;
 
@@ -601,9 +767,9 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
     if isinstance(expression, ast.ListComp):
         return transpile_listcomp(expression, block);
 
-    # comprehension
-    if isinstance(expression, ast.comprehension):
-        return transpile_comprehension(expression, block);
+    # GeneratorExpr
+    if isinstance(expression, ast.GeneratorExp):
+        return transpile_generatorexp(expression, block);
 
     # Attribute
     if isinstance(expression, ast.Attribute):
@@ -628,6 +794,10 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
     # Expr
     if isinstance(expression, ast.Expr):
         return transpile_expression(expression.value, block);
+
+    # Starred
+    if isinstance(expression, ast.Starred):
+        return transpile_starred(expression, block);
 
     print("Warning: unknown expression " + expression.__class__.__name__);
     exit();
@@ -732,7 +902,7 @@ def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: CodeBlock) -> st
     if result == "":
         print("Warning: unknown node " + node.__class__.__name__ + " which inherits from " + node.__class__.__bases__[0].__name__);
         exit();
-
+    
     return (
         block.get_offset() + result + 
         ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n" )
