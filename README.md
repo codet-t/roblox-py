@@ -52,6 +52,7 @@ ropy
 │   └── local.client.py
 └── shared
     └── main.py
+    
 
 src
 ├── server
@@ -59,8 +60,11 @@ src
 ├── client
 │   └── local.client.lua
 └── shared
-    └── main.lua
+    ├── main.lua
+    └── ropy.lua
 ```
+
+src/ropy.lua is the module that bridges the gap between the built-in Python functions which are not present in Luau.
 
 ### Compilation
 
