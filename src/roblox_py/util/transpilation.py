@@ -9,6 +9,11 @@ toggle_ast = False;
 toggle_line_of_code = False;
 toggle_block_ids = False;
 
+# Script specific options
+script_options = [
+    '@ropy:ignore_table_offset'
+]
+
 # Keep track of every block
 
 builtin_attribute_functions = {
@@ -32,6 +37,7 @@ builtin_functions = {
     "discriminate_tables": {
         "set": "ropy.set",		        # OK
         "all": "ropy.all",		        # OK
+        "slice": "ropy.slice"           # OK
     }
 }
 
@@ -45,6 +51,7 @@ class CodeBlock:
         self.line: str = "";
         self.deep_variables: list[str] = [];
         self.node: ast.FunctionDef = "";
+        self.options: list[str] = [];
 
     def get_function(self) -> Self:
         if self.parent is None: return self;
@@ -99,6 +106,16 @@ class CodeBlock:
         offset = level * spaces * char;
 
         return offset
+
+    def get_top_block(self) -> Self:
+        if self.parent is None: return self;
+
+        ancestor = self.parent;
+
+        while ancestor.block_id != "0":
+            ancestor = ancestor.parent
+
+        return ancestor;
 
 top_block = CodeBlock("0", "top", [], []);
 
@@ -269,11 +286,11 @@ def transpile_while(node: ast.While, block: CodeBlock) -> str:
 def transpile_if(node: ast.If, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
-    if_line = "if " + transpile_expression(node.test, block);
+    if_line = "if ropy.evaluate(" + transpile_expression(node.test, block);
 
     result = result + if_line;
     
-    result = result + " then\n";
+    result = result + ") then\n";
 
     result = result + transpile_lines(node.body, block.add_child("if"));
 
@@ -365,9 +382,9 @@ def transpile_boolop(node: ast.BoolOp, block: CodeBlock):
     # Loop through the values
     for i in range(0, len(node.values)):
         value = node.values[i];
-        result = result + transpile_expression(value);
+        result = result + "ropy.evaluate(" + transpile_expression(value, block) + ")";
         if i != len(node.values) - 1:
-            result = result + " " + transpile_expression(node.op);
+            result = result + " " + transpile_expression(node.op, block);
 
     return result;
 
@@ -387,6 +404,7 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
     # Get targets as array
     targets = [];
     added: str = None # None | "surface" | "deep"
+    variables_string = "";
 
     for i in range(0, len(node.targets)):
         node_target = node.targets[i]
@@ -405,8 +423,12 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
     for i in range(0, len(targets)):
         target = targets[i];
         result = result + target
+        variables_string = variables_string + target
         if i != len(node.targets) - 1:
             result = result + ", ";
+    
+    if isinstance(node.value, ast.Lambda):
+        result = result + "; " + variables_string
 
     result = result + " = ";
 
@@ -414,12 +436,14 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
 
     return result
 
-def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
+def transpile_generator(node: ast.ListComp | ast.DictComp | ast.SetComp | ast.GeneratorExp, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
     result = result + "(function()\n";
 
     result = result + block.get_offset(1) + "local result = {};\n";
+
+    block_level = 1;
 
     # Loop through the generators
     for i in range(0, len(node.generators)):
@@ -428,60 +452,51 @@ def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
         iter = transpile_expression(generator.iter, block);
         ifs = generator.ifs;
 
-        result = result + block.get_offset(1) + "for k, " + target
+        result = result + block.get_offset(block_level) + "for k, " + target
+
         result = result + " in pairs(" + iter + ") do\n";
 
-        if len(ifs) == 0:
-            result = result + block.get_offset(2) + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
-        else:
-            for j in range(0, len(ifs)):
-                if_ = ifs[j];
-                result = result + block.get_offset(2) + "if " + transpile_expression(if_.test, block) + " then\n";
-                result = result + block.get_offset(3)  + "result[k] = " + target + ";\n";
-                result = result + block.get_offset(2) + "end\n";
-            
-        result = result + block.get_offset(2) + "end\n";
+        # If we're at the last generator:
+        if i == len(node.generators) - 1:
+            if len(ifs) == 0:
+                thing = "";
+                if isinstance(node, ast.DictComp):
+                    thing = transpile_expression(node.value, block)
+                else:
+                    thing = transpile_expression(node.elt, block)
 
-    result = result + block.get_offset(1) + "return result;\n";
+                result = result + block.get_offset(block_level+1) + "table.insert(result, " + thing + ");\n";
+            else:
+                for j in range(0, len(ifs)):
+                    if_ = ifs[j];
+                    result = result + block.get_offset(block_level+1) + "if ropy.evaluate(" + transpile_expression(if_, block) + ") then\n";
+                    result = result + block.get_offset(block_level+2)  + "table.insert(result, " + target + ");\n";
+                    result = result + block.get_offset(block_level+1) + "end\n";
+                    
+        block_level += 1;
 
-    result = result + block.get_offset(-1) + "end)()";
-
-    return result;
-
-def transpile_generatorexp(node: ast.GeneratorExp, block: CodeBlock) -> str:
-    result = initialise_string(node, block)
-
-    result = result + "(function()\n";
-
-    result = result + block.get_offset(1) + "local result = {};\n";
-
-    # Loop through the generators
-    for i in range(0, len(node.generators)):
-        generator = node.generators[i];
-        target = transpile_expression(generator.target, block);
-        iter = transpile_expression(generator.iter, block);
-        ifs = generator.ifs;
-
-        result = result + block.get_offset(1) + "for k, " + target
-        result = result + " in pairs(" + iter + ") do\n";
-
-        if len(ifs) == 0:
-            result = result + block.get_offset(2) + "result[k] = " + transpile_expression(node.elt, block) + ";\n";
-        else:
-            for j in range(0, len(ifs)):
-                if_ = ifs[j];
-                result = result + block.get_offset(2) + "if " + transpile_expression(if_.test, block) + " then\n";
-                result = result + block.get_offset(3)  + "result[k] = " + target + ";\n";
-                result = result + block.get_offset(2) + "end\n";
-
-        result = result + block.get_offset(2) + "end\n";
-
+    for i in range(0, block_level):
+        if block_level == 1: continue;
+        result = result + block.get_offset(block_level-1) + "end\n";
+        block_level -= 1;
+        
     result = result + block.get_offset(1) + "return result;\n";
 
     result = result + block.get_offset() + "end)()";
 
     return result;
 
+def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
+    return transpile_generator(node, block)
+
+def transpile_dictcomp(node: ast.DictComp, block: CodeBlock) -> str:
+    return transpile_generator(node, block)
+
+def transpile_setcomp(node: ast.SetComp, block: CodeBlock) -> str:
+    return transpile_generator(node, block)
+
+def transpile_generatorexp(node: ast.GeneratorExp, block: CodeBlock) -> str:
+    return transpile_generator(node, block)
 
 def transpile_for(node: ast.For, block: CodeBlock) -> str:
     result = initialise_string(node, block)
@@ -543,7 +558,7 @@ def transpile_unaryop(node: ast.UnaryOp, block: CodeBlock) -> str:
     elif isinstance(node.op, ast.Invert):
         result = result + "not ";
 
-    result = result + transpile_expression(node.operand);
+    result = result + transpile_expression(node.operand, block);
 
     return result;
 
@@ -563,11 +578,11 @@ def transpile_list(node: ast.List, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_lamba(node: ast.Lambda, block: CodeBlock) -> str:
+def transpile_lambda(node: ast.Lambda, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
     # Header
-    result = result + "function (";
+    result = result + "(function (";
 
     # Loop through the arguments
     for i in range(0, len(node.args.args)):
@@ -576,20 +591,46 @@ def transpile_lamba(node: ast.Lambda, block: CodeBlock) -> str:
         if i != len(node.args.args) - 1:
             result = result + ", ";
 
-    result = result + ")";
-    result = result + transpile_lines(node.body, block.add_child("lambda"));
+    result = result + ")\n";
+
+    new_block = block.add_child("lambda");
+
+    result = result + new_block.get_offset() + "return (";
+    result = result + transpile_expression(node.body, block.add_child("lambda")) + ")";
+    result = result + new_block.get_offset() + "\nend)\n";
 
     return result;
 
 def transpile_binop(node: ast.BinOp, block: CodeBlock) -> str:
-    # BinOp(expr left, operator op, expr right)
     result = initialise_string(node, block)
-    
-    result = result + transpile_expression(node.left, block);
 
-    result = result + transpile_operator(node.op, block);
+    # BinOp(expr left, operator op, expr right)
+    left = transpile_expression(node.left, block);
+    right = transpile_expression(node.right, block);
+    op = transpile_operator(node.op, block);
 
-    result = result + transpile_expression(node.right, block);
+    if (isinstance(node.left, ast.BinOp) or
+        isinstance(node.left, ast.Call) or 
+        isinstance(node.left, ast.List) or 
+        isinstance(node.left, ast.Tuple) or 
+        isinstance(node.left, ast.Set) or 
+        isinstance(node.left, ast.Dict) ):
+        typeThing = "list";
+        if isinstance(node.left, ast.Tuple):
+            typeThing = "tuple";
+        elif isinstance(node.left, ast.Set):
+            typeThing = "set";
+        elif isinstance(node.left, ast.Dict):
+            typeThing = "dict";
+        
+        # ropy.concat.[ typeThing ](left, right)
+        result = result + "ropy.concat." + typeThing + "(" + left + ", " + right + ")";
+
+        return result;
+
+    result = result + left
+    result = result + op
+    result = result + right
 
     return result;
 
@@ -605,11 +646,55 @@ def transpile_yield(node: ast.Yield, block: CodeBlock):
 def transpile_subscript(node: ast.Subscript, block: CodeBlock):
     result = initialise_string(node, block)
 
-    # Build the subscript in lua {} notation
+    if not hasattr(node.slice, "lower"):
+        # Follow lua syntax: value + "[" + slice + "]"
+        result = result + transpile_expression(node.value, block);
+        result = result + "[";
+        result = result + transpile_expression(node.slice, block)
+        if not "ignore_table_offset" in top_block.options:
+            result = result + " + 1";
+        result = result + "]";
+        return result;
+
+
+    # ropy.slice.tuple(value, slice.lower or "nil", slice.upper or "nil", slice.step or "nil")
+
+    function_name = "ropy.slice.tuple";
+
+    if(isinstance(node.value, ast.List)):
+        function_name = "ropy.slice.list";
+    elif(isinstance(node.value, ast.Tuple)):
+        function_name = "ropy.slice.tuple";
+    elif(isinstance(node.value, ast.Dict)):
+        function_name = "ropy.slice.dict";
+    elif(isinstance(node.value, ast.Set)):
+        function_name = "ropy.slice.set";
+
+    result = result + function_name + "(";
     result = result + transpile_expression(node.value, block);
-    result = result + "[";
-    result = result + transpile_expression(node.slice, block);
-    result = result + "]";
+
+    result = result + ", ";
+
+    if hasattr(node.slice, "lower") and node.slice.lower is not None:
+        result = result + transpile_expression(node.slice.lower, block);
+    else:
+        result = result + "nil";
+
+    result = result + ", ";
+
+    if hasattr(node.slice, "upper") and node.slice.upper is not None:
+        result = result + transpile_expression(node.slice.upper, block);
+    else:
+        result = result + "nil";
+
+    result = result + ", ";
+
+    if hasattr(node.slice, "step") and node.slice.step is not None:
+        result = result + transpile_expression(node.slice.step, block);
+    else:
+        result = result + "nil";
+
+    result = result + ")";
 
     return result;
 
@@ -681,6 +766,13 @@ def transpile_name(node: ast.Name, block: CodeBlock) -> str:
 def transpile_string(node: ast.Str, block: CodeBlock) -> str:
     result = initialise_string(node, block)
 
+    if block.block_id == "0" and node.s in script_options:
+        result = result + " -- " + node.s;
+        if node.s == "@ropy:ignore_table_offset" and "ignore_table_offset" not in block.options:
+            block.options.append("ignore_table_offset");
+
+        return result;
+
     result = result + "\"" + node.s + "\"";
 
     return result;
@@ -698,6 +790,51 @@ def transpile_set(node: ast.Set, block: CodeBlock) -> str:
             result = result + ", ";
 
     result = result + "}";
+
+    return result;
+
+def transpile_slice(node: ast.Slice, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    # Slice
+    #   expression: lower (optional),
+    #   expression: upper (optional)
+    #   expression: step (optional)
+    
+    print("Slice as its own object is unsupported!")
+
+    return result;
+
+def transpile_ifexp(node: ast.IfExp, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    # IfExp:
+    #   expr test       if X then
+    #   expr body           Y
+    #   expr orelse     else Z; end
+    # i.e X and Y or Z
+
+    result = result + "(ropy.evaluate(";
+    result = result + transpile_expression(node.test, block);
+    result = result + ") and ";
+    result = result + transpile_expression(node.body, block);
+    result = result + ") or (ropy.evaluate(";
+    result = result + transpile_expression(node.orelse, block);
+    result = result + "))";
+
+    return result;
+
+def transpile_and(node: ast.And, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + "and ";
+
+    return result;
+
+def transpile_or(node: ast.Or, block: CodeBlock) -> str:
+    result = initialise_string(node, block)
+
+    result = result + "or ";
 
     return result;
 
@@ -725,15 +862,15 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
 
     # UnaryOp
     if isinstance(expression, ast.UnaryOp):
-        return transpile_unaryop(expression.op, block);
+        return transpile_unaryop(expression, block);
     
     # Lambda
     if isinstance(expression, ast.Lambda):
-        return transpile_lamba(expression, block);
+        return transpile_lambda(expression, block);
 
-    # IfExp (should be a separate function)
+    # IfExp
     if isinstance(expression, ast.IfExp):
-        return transpile_expression(expression.test, block) + " ? " + transpile_expression(expression.body, block) + " : " + transpile_expression(expression.orelse, block);
+        return transpile_ifexp(expression, block);
 
     # Dict (should be a separate function)
     if isinstance(expression, ast.Dict):
@@ -767,6 +904,14 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
     if isinstance(expression, ast.ListComp):
         return transpile_listcomp(expression, block);
 
+    # SetComp
+    if isinstance(expression, ast.SetComp):
+        return transpile_setcomp(expression, block);
+
+    # DictComp
+    if isinstance(expression, ast.DictComp):
+        return transpile_dictcomp(expression, block);
+
     # GeneratorExpr
     if isinstance(expression, ast.GeneratorExp):
         return transpile_generatorexp(expression, block);
@@ -798,6 +943,18 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
     # Starred
     if isinstance(expression, ast.Starred):
         return transpile_starred(expression, block);
+
+    # Slice
+    if isinstance(expression, ast.Slice):
+        return transpile_slice(expression, block);
+
+    # And
+    if isinstance(expression, ast.And):
+        return transpile_and(expression, block);
+
+    # Or
+    if isinstance(expression, ast.Or):
+        return transpile_or(expression, block);
 
     print("Warning: unknown expression " + expression.__class__.__name__);
     exit();

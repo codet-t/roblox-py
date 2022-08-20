@@ -19,6 +19,34 @@ ropy.operator_in = function(needle, haystack)
 	return false
 end
 
+ropy.evaluate = function(anything)
+	if type(anything) == "table" then
+		if ropy.len(anything) == 0 then
+			return false
+		else
+			return anything;
+		end
+	end
+
+	if type(anything) == "string" then
+		if #anything == 0 then
+			return false
+		else
+			return anything;
+		end
+	end
+
+	if type(anything) == "number" then
+		if anything == 0 then
+			return false
+		else
+			return anything
+		end
+	end
+
+	return anything;
+end
+
 ropy.range = function(start, stop, step)
 	if stop == nil then stop = start; start = 1 end
 	if step == nil then step = 1 end
@@ -33,7 +61,7 @@ ropy.range = function(start, stop, step)
 
 	local result = {}
 	local i = start
-	while i <= stop do
+	while i < stop do
 		table.insert(result, i)
 		i = i + step
 	end
@@ -140,5 +168,66 @@ ropy.all = {
 
 ropy.all.tuple = ropy.all.list
 ropy.all.set = ropy.all.list
+
+ropy.slice = {
+	list = function(pytable, start, stop, step)
+		-- Replicate python's slice(start, stop, step) behaviour
+		
+		if step == nil then step = 1 end
+		if stop == nil then stop = #pytable end
+		if start == nil then start = 1 end
+
+		if start < 0 then start = #pytable + start end
+		if stop < 0 then stop = #pytable + stop end
+		
+		if start > stop then return {} end
+		if step == 0 then return {} end
+
+		if step > 1 then
+			local result = {}
+			for i = start, stop, step do
+				table.insert(result, pytable[i])
+			end
+			return result
+		elseif step < 1 then
+			local result = {}
+			for i = stop, start, step do
+				table.insert(result, pytable[i])
+			end
+			return result
+		else
+			return ropy.range(start, stop)
+		end
+	end,
+
+	error = function()
+		error("slice is only a list or tuple method")
+	end
+}
+
+ropy.slice.dict = ropy.slice.error
+ropy.slice.set = ropy.slice.error
+ropy.slice.tuple = ropy.slice.list
+
+ropy.concat = {
+	list = function(pytable, other)
+		local result = {}
+		for _, v in pairs(pytable) do
+			table.insert(result, v)
+		end
+		for _, v in pairs(other) do
+			table.insert(result, v)
+		end
+		return result
+	end,
+
+	error = function()
+		error("concat is only a list, set or tuple method")
+	end
+}
+
+ropy.concat.dict = ropy.concat.error
+ropy.concat.set = ropy.concat.list
+ropy.concat.tuple = ropy.concat.list
 
 return ropy;
