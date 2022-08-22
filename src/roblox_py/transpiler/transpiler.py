@@ -1,6 +1,8 @@
 from ..util import transpilation as transpilation_util;
 from ..util import strings as string_util;
 
+from ..transpiler.compile import compile_from_ast as compiler;
+
 import os
 import ast
 
@@ -27,7 +29,7 @@ def get_ast_tree(file_path: str) -> dict[str, str]:
     except Exception as e:
         error = "Error parsing file: " + str(e);
 
-    result = transpilation_util.transpile_module(parsed);
+    result = compiler.compile_module(parsed);
 
     return { "result": result, "error": error };
 
@@ -84,7 +86,7 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
 
         os.makedirs(os.path.dirname(new_file_name), exist_ok=True)
         with open(new_file_name, "w") as f:
-            f.write(results[full_name])
+            f.write(results[full_name] or "")
     
         # Check if file_path ends in either .client.py or .server.py
     

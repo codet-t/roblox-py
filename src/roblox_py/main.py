@@ -1,7 +1,8 @@
-from ..roblox_py.transpiler import transpiler
 import os
 import json
 import time
+
+import src.roblox_py.transpiler.transpiler as transpiler
 
 settings = {};
 

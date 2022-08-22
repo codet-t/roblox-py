@@ -2,12 +2,14 @@ import ast
 import re
 from typing_extensions import Self
 
+from ..transpiler.lua_ast.lua_scope import Scope
+
 # Refer to:
 # https://docs.python.org/3/library/ast.html#abstract-grammar
 
 toggle_ast = False;
 toggle_line_of_code = False;
-toggle_block_ids = False;
+toggle_scope_ids = False;
 
 # Script specific options
 script_options = [
@@ -41,85 +43,9 @@ builtin_functions = {
     }
 }
 
-class CodeBlock:
-    def __init__(self, block_id: str, type: str, variables: list[str], children: list[Self], parent: Self | None = None):
-        self.block_id: str = block_id;
-        self.type: str = type;
-        self.variables: str = variables;
-        self.children: list[Self] = children;
-        self.parent: Self | None = parent;
-        self.line: str = "";
-        self.deep_variables: list[str] = [];
-        self.node: ast.FunctionDef = "";
-        self.options: list[str] = [];
+top_block = Scope("0", "top", [], []);
 
-    def get_function(self) -> Self:
-        if self.parent is None: return self;
-
-        if self.type == "function": return self;
-
-        ancestor = self.parent;
-
-        while ancestor.block_id != "0" and ancestor.type != "function":
-            ancestor = ancestor.parent
-
-        return ancestor;
-
-    def add_variable(self, variable: str) -> None | str: # "surface" | "deep"
-        function_block = self.get_function();
-        
-        if variable in function_block.variables or variable in function_block.deep_variables: return None;
-
-        if function_block == self:
-            function_block.variables.append(variable);
-            return "surface"
-        else:
-            function_block.deep_variables.append(variable);
-            return "deep"
-
-    def add_child(self, type: str, node: ast.FunctionDef | None = None) -> Self: # Preferred over __init__
-        # New id is the self.block_id + "." + the next available int
-        new_id = self.block_id + "." + str(len(self.children));
-
-        # Create a new block
-        new_block = CodeBlock(new_id, type, [], [], self);
-
-        # If node is not None, set the node of the block
-        if node is not None: new_block.node = node;
-
-        # Add the new block to the children of the current block
-        self.children.append(new_block);
-
-        return new_block;
-    
-    def get_offset(self, relative_offset: int = 0) -> str:
-        # Get amount of periods in the block_id
-        # Multiply " " by this amount
-        level = len(self.block_id.split(".")) - 1 + relative_offset
-
-        # kirby = ["(>'-')>","<('-'<)","^('-')^","v('-')v","(>'-')>","(^-^)"]; 
-        # return "--[[" + " ".join(kirby[i % len(kirby)] for i in range(level)) + "]]"
-        
-        spaces = 1;
-        char = "\t";
-
-        offset = level * spaces * char;
-
-        return offset
-
-    def get_top_block(self) -> Self:
-        if self.parent is None: return self;
-
-        ancestor = self.parent;
-
-        while ancestor.block_id != "0":
-            ancestor = ancestor.parent
-
-        return ancestor;
-
-top_block = CodeBlock("0", "top", [], []);
-
-def get_function_block_by_name(name: str, within_block: CodeBlock) -> CodeBlock:
+def get_function_block_by_name(name: str, within_block: Scope) -> Scope:
     # Loop through children of within_block, find the function with the same name
     for child in within_block.children:
         if child.type == "function" and child.node.name == name:
@@ -127,19 +53,19 @@ def get_function_block_by_name(name: str, within_block: CodeBlock) -> CodeBlock:
     
     return None;
 
-def initialise_string(node: any, block: CodeBlock) -> str:
+def initialise_string(node: any, block: Scope) -> str:
     result = "";
 
     if toggle_ast:
         result = result + "--[[" + node.__class__.__name__ + "]]"
 
-    if toggle_block_ids:
-        result = result + "--[[ BlockId: " + block["block_id"] + "]]";
+    if toggle_scope_ids:
+        result = result + "--[[ BlockId: " + block["scope_id"] + "]]";
     
     return result;
 
-def process_builtin_attribute_function(node: ast.Call, block: CodeBlock) -> str | None:
-    # If I knew how to obtain the attributee node from the given node, I could do this
+def process_builtin_attribute_function(node: ast.Call, block: Scope) -> str | None:
+    # If I knew how to obtain the attributed node from the given node, I could do this
     # builtin_list = builtin_attribute_functions;
     # nodeType = "";
     # b = node.func.value;
@@ -195,7 +121,7 @@ def process_builtin_attribute_function(node: ast.Call, block: CodeBlock) -> str 
 
     return result;
 
-def transpile_call(node: ast.Call, block: CodeBlock) -> str:
+def transpile_call(node: ast.Call, block: Scope) -> str:
     result = initialise_string(node, block)
 
     if isinstance(node.func, ast.Attribute):
@@ -272,7 +198,7 @@ def transpile_call(node: ast.Call, block: CodeBlock) -> str:
             
     return result;
 
-def transpile_while(node: ast.While, block: CodeBlock) -> str:
+def transpile_while(node: ast.While, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "while " + transpile_expression(node.test, block) + " do\n";
@@ -283,7 +209,7 @@ def transpile_while(node: ast.While, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_if(node: ast.If, block: CodeBlock) -> str:
+def transpile_if(node: ast.If, block: Scope) -> str:
     result = initialise_string(node, block)
 
     if_line = "if ropy.evaluate(" + transpile_expression(node.test, block);
@@ -303,7 +229,7 @@ def transpile_if(node: ast.If, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_function(node: ast.FunctionDef, block: CodeBlock) -> str:
+def transpile_function(node: ast.FunctionDef, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # Get the function name
@@ -376,7 +302,7 @@ def transpile_function(node: ast.FunctionDef, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_boolop(node: ast.BoolOp, block: CodeBlock):
+def transpile_boolop(node: ast.BoolOp, block: Scope):
     result = initialise_string(node, block);
 
     # Loop through the values
@@ -388,14 +314,14 @@ def transpile_boolop(node: ast.BoolOp, block: CodeBlock):
 
     return result;
 
-def transpile_return(node: ast.Return, block: CodeBlock) -> str:
+def transpile_return(node: ast.Return, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "return " + transpile_expression(node.value, block);
 
     return result;
 
-def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
+def transpile_assign(node: ast.Assign, block: Scope) -> str:
 
     result = initialise_string(node, block)
 
@@ -436,7 +362,7 @@ def transpile_assign(node: ast.Assign, block: CodeBlock) -> str:
 
     return result
 
-def transpile_generator(node: ast.ListComp | ast.DictComp | ast.SetComp | ast.GeneratorExp, block: CodeBlock) -> str:
+def transpile_generator(node: ast.ListComp | ast.DictComp | ast.SetComp | ast.GeneratorExp, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "(function()\n";
@@ -486,19 +412,19 @@ def transpile_generator(node: ast.ListComp | ast.DictComp | ast.SetComp | ast.Ge
 
     return result;
 
-def transpile_listcomp(node: ast.ListComp, block: CodeBlock) -> str:
+def transpile_listcomp(node: ast.ListComp, block: Scope) -> str:
     return transpile_generator(node, block)
 
-def transpile_dictcomp(node: ast.DictComp, block: CodeBlock) -> str:
+def transpile_dictcomp(node: ast.DictComp, block: Scope) -> str:
     return transpile_generator(node, block)
 
-def transpile_setcomp(node: ast.SetComp, block: CodeBlock) -> str:
+def transpile_setcomp(node: ast.SetComp, block: Scope) -> str:
     return transpile_generator(node, block)
 
-def transpile_generatorexp(node: ast.GeneratorExp, block: CodeBlock) -> str:
+def transpile_generatorexp(node: ast.GeneratorExp, block: Scope) -> str:
     return transpile_generator(node, block)
 
-def transpile_for(node: ast.For, block: CodeBlock) -> str:
+def transpile_for(node: ast.For, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "for _," + transpile_expression(node.target, block) + " in " + transpile_expression(node.iter, block) + " do\n";
@@ -511,7 +437,7 @@ def transpile_for(node: ast.For, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_compare(node: ast.Compare, block: CodeBlock):
+def transpile_compare(node: ast.Compare, block: Scope):
     result = initialise_string(node, block)
 
     # Loop through the expressions
@@ -545,7 +471,7 @@ def transpile_compare(node: ast.Compare, block: CodeBlock):
 
     return result;
 
-def transpile_unaryop(node: ast.UnaryOp, block: CodeBlock) -> str:
+def transpile_unaryop(node: ast.UnaryOp, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # Check the operator
@@ -562,7 +488,7 @@ def transpile_unaryop(node: ast.UnaryOp, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_list(node: ast.List, block: CodeBlock) -> str:
+def transpile_list(node: ast.List, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "{";
@@ -578,7 +504,7 @@ def transpile_list(node: ast.List, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_lambda(node: ast.Lambda, block: CodeBlock) -> str:
+def transpile_lambda(node: ast.Lambda, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # Header
@@ -601,7 +527,7 @@ def transpile_lambda(node: ast.Lambda, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_binop(node: ast.BinOp, block: CodeBlock) -> str:
+def transpile_binop(node: ast.BinOp, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # BinOp(expr left, operator op, expr right)
@@ -634,7 +560,7 @@ def transpile_binop(node: ast.BinOp, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_yield(node: ast.Yield, block: CodeBlock):
+def transpile_yield(node: ast.Yield, block: Scope):
     result = initialise_string(node, block)
 
     block.add_variable("yield");
@@ -643,7 +569,7 @@ def transpile_yield(node: ast.Yield, block: CodeBlock):
 
     return result;
 
-def transpile_subscript(node: ast.Subscript, block: CodeBlock):
+def transpile_subscript(node: ast.Subscript, block: Scope):
     result = initialise_string(node, block)
 
     if not hasattr(node.slice, "lower"):
@@ -698,7 +624,7 @@ def transpile_subscript(node: ast.Subscript, block: CodeBlock):
 
     return result;
 
-def transpile_delete(node: ast.Delete, block: CodeBlock):
+def transpile_delete(node: ast.Delete, block: Scope):
     result = initialise_string(node, block)
 
     # Loop through the targets and add " = nil" after it
@@ -714,7 +640,7 @@ def transpile_delete(node: ast.Delete, block: CodeBlock):
 
     return result;
 
-def transpile_augassign(node: ast.AugAssign, block: CodeBlock) -> str:
+def transpile_augassign(node: ast.AugAssign, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # x += 1
@@ -729,7 +655,7 @@ def transpile_augassign(node: ast.AugAssign, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_attribute(node: ast.Attribute, block: CodeBlock) -> str:
+def transpile_attribute(node: ast.Attribute, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + transpile_expression(node.value, block);
@@ -737,7 +663,7 @@ def transpile_attribute(node: ast.Attribute, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_dict(node: ast.Dict, block: CodeBlock) -> str:
+def transpile_dict(node: ast.Dict, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "{";
@@ -756,17 +682,17 @@ def transpile_dict(node: ast.Dict, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_name(node: ast.Name, block: CodeBlock) -> str:
+def transpile_name(node: ast.Name, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + node.id;
 
     return result;
 
-def transpile_string(node: ast.Str, block: CodeBlock) -> str:
+def transpile_string(node: ast.Str, block: Scope) -> str:
     result = initialise_string(node, block)
 
-    if block.block_id == "0" and node.s in script_options:
+    if block.scope_id == "0" and node.s in script_options:
         result = result + " -- " + node.s;
         if node.s == "@ropy:ignore_table_offset" and "ignore_table_offset" not in block.options:
             block.options.append("ignore_table_offset");
@@ -777,7 +703,7 @@ def transpile_string(node: ast.Str, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_set(node: ast.Set, block: CodeBlock) -> str:
+def transpile_set(node: ast.Set, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "{";
@@ -793,7 +719,7 @@ def transpile_set(node: ast.Set, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_slice(node: ast.Slice, block: CodeBlock) -> str:
+def transpile_slice(node: ast.Slice, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # Slice
@@ -805,7 +731,7 @@ def transpile_slice(node: ast.Slice, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_ifexp(node: ast.IfExp, block: CodeBlock) -> str:
+def transpile_ifexp(node: ast.IfExp, block: Scope) -> str:
     result = initialise_string(node, block)
 
     # IfExp:
@@ -824,21 +750,21 @@ def transpile_ifexp(node: ast.IfExp, block: CodeBlock) -> str:
 
     return result;
 
-def transpile_and(node: ast.And, block: CodeBlock) -> str:
+def transpile_and(node: ast.And, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "and ";
 
     return result;
 
-def transpile_or(node: ast.Or, block: CodeBlock) -> str:
+def transpile_or(node: ast.Or, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "or ";
 
     return result;
 
-def transpile_starred(node: ast.Starred, block: CodeBlock) -> str:
+def transpile_starred(node: ast.Starred, block: Scope) -> str:
     result = initialise_string(node, block)
 
     result = result + "--[[*]]";
@@ -847,7 +773,7 @@ def transpile_starred(node: ast.Starred, block: CodeBlock) -> str:
     return result;
 
 # Selector function
-def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> str:
+def transpile_expression(expression: ast.Expr | ast.expr, block: Scope) -> str:
     # BoolOp
     if isinstance(expression, ast.BoolOp):
         return transpile_boolop(expression, block);
@@ -960,7 +886,7 @@ def transpile_expression(expression: ast.Expr | ast.expr, block: CodeBlock) -> s
     exit();
 
 # Selector function
-def transpile_statement(statement: ast.stmt | list[ast.stmt], block: CodeBlock) -> str:
+def transpile_statement(statement: ast.stmt | list[ast.stmt], block: Scope) -> str:
     # If the statement is a FunctionDef
     if isinstance(statement, ast.FunctionDef):
         return transpile_function(statement, block);
@@ -1001,7 +927,7 @@ def transpile_statement(statement: ast.stmt | list[ast.stmt], block: CodeBlock) 
     exit();
 
 # Selector function
-def transpile_operator(operator: ast.operator, block: CodeBlock) -> str:
+def transpile_operator(operator: ast.operator, block: Scope) -> str:
     result = initialise_string(operator, block)
 
     # Check the operator
@@ -1026,7 +952,7 @@ def transpile_operator(operator: ast.operator, block: CodeBlock) -> str:
     print("Warning: Unknown operator " + operator.__class__.__name__);
     exit();
 
-def transpile_statements(statements: list[ast.stmt], block: CodeBlock) -> str:
+def transpile_statements(statements: list[ast.stmt], block: Scope) -> str:
     result = "";
 
     for statement in statements:
@@ -1034,7 +960,7 @@ def transpile_statements(statements: list[ast.stmt], block: CodeBlock) -> str:
 
     return result;
 
-def transpile_expressions(expressions: list[ast.expr], block: CodeBlock) -> str:
+def transpile_expressions(expressions: list[ast.expr], block: Scope) -> str:
     result = "";
 
     for expression in expressions:
@@ -1043,7 +969,7 @@ def transpile_expressions(expressions: list[ast.expr], block: CodeBlock) -> str:
     return result;
 
 # Selector function
-def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: CodeBlock) -> str:
+def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: Scope) -> str:
     # Check if statement or expression
     result = "";
 
@@ -1065,7 +991,7 @@ def transpile_line(node: ast.Expr | ast.expr | ast.stmt, block: CodeBlock) -> st
         ( (" -- Line " + str(node.lineno) + "\n") if toggle_line_of_code else "\n" )
     );
 
-def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator], block: CodeBlock) -> str:
+def transpile_lines(node: list[ast.expr | ast.Expr | ast.stmt | ast.operator], block: Scope) -> str:
     # If statement is a list of statements/expressions
     result: str = "";
 
@@ -1083,6 +1009,6 @@ def transpile_module(module: ast.Module) -> str:
     result = result + transpile_lines(module.body, top_block);
 
     # Reset top block
-    top_block = CodeBlock("0", "module", [], []);
+    top_block = Scope("0", "module", [], []);
 
     return result
