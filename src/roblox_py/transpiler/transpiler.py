@@ -1,4 +1,4 @@
-from ..util import transpilation as transpilation_util;
+from typing import Dict
 from ..util import strings as string_util;
 
 from ..transpiler.compile import compile_from_ast as compiler;
@@ -6,9 +6,9 @@ from ..transpiler.compile import compile_from_ast as compiler;
 import os
 import ast
 
-def get_ast_tree(file_path: str) -> dict[str, str]:
-    result: any = None;
+def get_ast_tree(file_path: str) -> Dict[str, str | None]:
     error: str | None = None;
+    result: str | None = None;
 
     # Try to read the file given to us
     try:
@@ -21,29 +21,38 @@ def get_ast_tree(file_path: str) -> dict[str, str]:
     if error != None: return { "error": error };
     # Get non-strings out of the way
 
-    if not isinstance(result, str): return { "error": "File is valid" };
+    if result is None:
+        return { "error": "File is valid" };
 
-# Try ast.parse(ast.unparse(result))
+    # Try ast.parse(ast.unparse(result))
+    parsed: ast.Module | None = None;
+
     try:
-        parsed: ast.AST = ast.parse(result);
+        parsed = ast.parse(result);
     except Exception as e:
         error = "Error parsing file: " + str(e);
+    
+    if parsed is None:
+        return { "error": "Failed to parse file" };
 
     result = compiler.compile_module(parsed);
 
     return { "result": result, "error": error };
 
-def transpile_file(file_path: str) -> dict[str, str]:
+def transpile_file(file_path: str) -> Dict[str, str | None ]:
     attempt = get_ast_tree(file_path);
 
     # Get errored file out of the way
-    if attempt["error"] != None: return attempt;
+    if attempt["error"] != None:
+        return attempt;
     
     return { "result": attempt["result"] };
 
-def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, str]:
-    results = {};
+def transpile_folder(folder_origin: str, folder_destination: str, ropy_module_destination: str) -> Dict[str, Dict[str, str | None]]:
+    results: Dict[str, str | None] = {};
     errors = {};
+    
+    full_name: str = "";
 
     for root, dirs, files in os.walk(folder_origin, topdown=False):
         # Loop through directories and files
@@ -72,11 +81,9 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
 
     # Get folder_destination full name
     folder_destination_full_name = os.path.join(os.getcwd(), folder_destination);
-
-    module_folder = "";
     
     # Create and write the results to the destination folder
-    for full_name in results:
+    for file_name in results:
         name_without_root = full_name.replace(folder_origin + "\\", "");
 
         new_file_name = os.path.join(folder_destination_full_name, name_without_root)
@@ -86,28 +93,39 @@ def transpile_folder(folder_origin: str, folder_destination: str) -> dict[str, s
 
         os.makedirs(os.path.dirname(new_file_name), exist_ok=True)
         with open(new_file_name, "w") as f:
-            f.write(results[full_name] or "")
-    
-        # Check if file_path ends in either .client.py or .server.py
-    
-        if (new_file_name.endswith(".lua") and 
-        not new_file_name.endswith(".client.lua") and
-        not new_file_name.endswith(".server.lua")):
-            module_folder = os.path.dirname(new_file_name);
-    
-    # Get folder of this script
-    script = os.path.dirname(os.path.realpath(__file__));
-    
-    # Get folder of script
-    script_folder = os.path.dirname(script);
+            f.write(results[file_name] or "")
 
-    # Get ropy_module.lua in script_folder
-    ropy_module = os.path.join(script_folder, "ropy_module.lua");
+    ropy_module_destination = ropy_module_destination.replace("/", "\\");
+    # Clone ropy_module.lua to ropy_module_destination with the name "ropy.lua", if not exists
+    # If exists, modify the contents of ropy_module_destination.["ropy.lua"] to be the contents of ropy_module.lua
+    
+    # Get the folder of this script
+    script_folder = os.path.dirname(os.path.realpath(__file__));
 
-    # Clone ropy_module.lua to module_folder
-    os.system("copy " + ropy_module + " " + module_folder);
+    # Get the root folder of script_folder
+    script_folder_root = os.path.dirname(script_folder);
 
-    # Rename ropy_module.lua to ropy.lua
-    os.rename(os.path.join(module_folder, "ropy_module.lua"), os.path.join(module_folder, "ropy.lua"));
+    # Get the ropy_module.lua file from the root folder
+    ropy_module_file = os.path.join(script_folder_root, "ropy_module.lua");
+
+    # Get ropy_module_contents
+    ropy_module_contents = None;
+    with open(ropy_module_file, "r") as f:
+        ropy_module_contents = f.read();
+
+    # If the file exists in ropy_module_destination, modify the contents of 
+    # this file to be the contents of ropy_module.lua
+    ropy_module_name_full = os.path.join(os.getcwd(), ropy_module_destination + "\\ropy.lua");
+
+    if os.path.exists(ropy_module_name_full):
+        with open(ropy_module_name_full, "w") as f:
+            f.write(ropy_module_contents);
+
+    # If the file does not exist, create a file called "ropy.lua" in ropy_module_destination
+    else:
+        # Create ropy_module_name_full, with dirs and all
+        os.makedirs(os.path.dirname(ropy_module_name_full), exist_ok=True)
+        with open(ropy_module_name_full, "w") as f:
+            f.write(ropy_module_contents);
 
     return {"results": results, "errors": errors};

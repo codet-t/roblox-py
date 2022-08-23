@@ -24,10 +24,14 @@ def get_settings():
     if "inDirectory" not in settings:
         print("Error: inDirectory not found in ropy.json");
         exit();
+    
+    if "ropyModuleDirectory" not in settings:
+        print("Error: ropyModuleDirectory not found in ropy.json");
+        exit();
 
     # Reject any foreign settings
     for setting in settings:
-        if setting not in ["outDirectory", "inDirectory"]:
+        if setting not in ["outDirectory", "inDirectory", "ropyModuleDirectory"]:
             print("Error: " + setting + " is not a valid setting");
             exit();
 
@@ -42,10 +46,10 @@ def get_settings():
     
     return settings;
 
-def transpile(folderOrigin: str, folderDestination: str):
+def transpile(folder_origin: str, folder_destination: str, ropy_module_directory: str):
     start_time = int(round(time.time() * 1000))
 
-    transpilations = transpiler.transpile_folder(folderOrigin, folderDestination)
+    transpilations = transpiler.transpile_folder(folder_origin, folder_destination, ropy_module_directory);
 
     transpilation_results = transpilations["results"];
     transpilation_errors = transpilations["errors"];
@@ -67,4 +71,4 @@ def transpile(folderOrigin: str, folderDestination: str):
 
 def main():
     settings = get_settings();
-    transpile(settings["inDirectory"], settings["outDirectory"]);
+    transpile(settings["inDirectory"], settings["outDirectory"], settings["ropyModuleDirectory"]);

@@ -1,53 +1,61 @@
+from typing import List
 from typing_extensions import Self
 from . import lua_ast_nodes as lua_ast;
 
 class Scope:
-    def __init__(self, scope_id: str, type: str, variables: list[str], children: list[Self], parent: Self | None = None):
+    def __init__(self, scope_id: str, type: str, variables: List[str], children: List[Self], parent: Self | None = None):
         self.scope_id = scope_id;
         self.type = type;
         self.variables = variables;
         self.children = [];
         self.parent = parent;
         self.line = "";
-        self.deep_variables = [];
         self.options = [];
+        self.node = None;
+        self.function = None;
 
     def get_function(self) -> Self:
-        if self.parent is None: return self;
-
         if self.type == "function": return self;
 
-        ancestor = self.parent;
+        if self.parent is None:
+            return self;
 
-        while ancestor.scope_id != "0" and ancestor.type != "function":
-            ancestor = ancestor.parent
+        ancestor: Self = self.parent;
+
+        while ancestor is not None and ancestor.scope_id != "0" and ancestor.type != "function":
+            if ancestor.parent is None: 
+                break
+            else:
+                ancestor = ancestor.parent;
 
         return ancestor;
 
     def add_variable(self, variable: str) -> None | str: # "surface" | "deep"
         function_scope = self.get_function();
         
-        if variable in function_scope.variables or variable in function_scope.deep_variables: return None;
+        if variable in function_scope.variables: return None;
 
         if function_scope == self:
             function_scope.variables.append(variable);
             return "surface"
-        else:
-            function_scope.deep_variables.append(variable);
-            return "deep"
 
-    def add_child(self, type: str, function_node: lua_ast.FunctionNode | None = None) -> Self: # Preferred over __init__
+    def add_child(self, type: str, node: lua_ast.FunctionNode | lua_ast.IfNode) -> Self: # Preferred over __init__
         # New id is the self.scope_id + "." + the next available int
-        new_id = self.scope_id + "." + str(len(self.children));
+        children: List[Self] = self.children # type: ignore
+        new_id = self.scope_id + "." + str(len(children));
 
         # Create a new scope
         new_scope = Scope(new_id, type, [], [], self);
 
         # If node is not None, set the node of the scope
-        if function_node is not None: new_scope.node = function_node;
+        if node is not None: new_scope.node = node;
+
+        # If node is FunctionNode, set the function of the scope
+        if isinstance(node, lua_ast.FunctionNode): new_scope.function = node;
 
         # Add the new scope to the children of the current scope
-        self.children.append(new_scope);
+        children.append(new_scope);
+        self.children = children;
 
         return new_scope;
     
@@ -67,11 +75,17 @@ class Scope:
         return offset
 
     def get_top_scope(self) -> Self:
-        if self.parent is None: return self;
+        if self.scope_id == "0": return self;
 
-        ancestor = self.parent;
+        if self.parent is None:
+            return self;
 
-        while ancestor.scope_id != "0":
-            ancestor = ancestor.parent
+        ancestor: Self = self.parent;
+
+        while ancestor is not None and ancestor.scope_id != "0":
+            if ancestor.parent is None: 
+                break
+            else:
+                ancestor = ancestor.parent;
 
         return ancestor;
