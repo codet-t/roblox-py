@@ -1,8 +1,4 @@
-from typing import List
-from typing_extensions import Self
-from . import lua_ast_nodes as lua_ast;
-
-class Scope:
+class PythonScope:
     def __init__(self, scope_id: str, type: str, variables: List[str], children: List[Self], parent: Self | None = None):
         self.scope_id = scope_id;
         self.type = type;
@@ -39,7 +35,10 @@ class Scope:
             function_scope.variables.append(variable);
             return "surface"
 
-    def add_child(self, type: str, node: lua_ast.FunctionNode | lua_ast.IfNode) -> Self: # Preferred over __init__
+    def add_child(self, type: str, node:  lua_ast.FunctionNode 
+                                        | lua_ast.IfNode 
+                                        | lua_ast.WhileNode
+                                        | lua_ast.ForNode) -> Self: # Preferred over __init__
         # New id is the self.scope_id + "." + the next available int
         children: List[Self] = self.children # type: ignore
         new_id = self.scope_id + "." + str(len(children));

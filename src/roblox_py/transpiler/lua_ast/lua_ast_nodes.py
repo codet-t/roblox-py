@@ -1,226 +1,278 @@
 from typing import Any, List, Literal
-from typing_extensions import Self
 
 class Node:
-    def __init__(self, line_begin: int | None, function_node: Any):
-        self.function_node = function_node;
-        self.line_begin = line_begin
+    def __init__(self, line_begin: int | None):
+        from ..scope import LuaScope
+        self.line_begin = line_begin;
+        self.scope: LuaScope;
+
+class ExpressionNode(Node):
+    def __init__(self, line_begin: int | None):
+        super().__init__(line_begin)
+
+class Variable(ExpressionNode):
+    def __init__(self, name: str, type: Literal['string', 'number', 'table', 'function', 'nil'] | None, 
+                 direct: bool, line_begin: int):
+        super().__init__(line_begin)
+        self.name = name
+        self.type = type
+        self.direct = direct
+        self.administred = False
 
 class StatementNode(Node):
-    def __init__(self, line_begin: int, function_node: Any):
-        super().__init__(line_begin, function_node);
+    def __inift__(self, line_begin: int):
+        super().__init__(line_begin)
 
 class FunctionNode(StatementNode):
     def __init__(self, name: str | None, args: List[Any],
                  body: List[Any], decorators: List[str], return_annotation: Any,
-                 is_lambda: bool,
-                 line_begin: int, function_node: Self | None):
+                 is_lambda: bool, variables: List[Any], yields: List[Node | None],
+                 line_begin: int):
         self.name = name # None if anonymous
         self.args = args
         self.body = body
-        self.is_lambda = is_lambda
         self.decorators = decorators # the @ decorators/options above a function
         self.return_annotation = return_annotation # None if no return statement
+        self.is_lambda = is_lambda
+        self.variables = variables
+        self.yields = yields
         self.line_begin = line_begin
-        self.function_node = function_node # None if global
-    
-class ExpressionNode(Node):
-    def __init__(self, line_begin: int | None, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+
 class ModuleNode(Node):
     def __init__(self, body: List[Node]):
-        super().__init__(None, None)
+        super().__init__(None)
         self.body = body
 
 class ReturnNode(StatementNode):
-    def __init__(self, value: ExpressionNode | None, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, value: ExpressionNode | None, line_begin: int):
+        super().__init__(line_begin)
         self.value = value
 
 class AttributeNode(ExpressionNode):
-    def __init__(self, value: ExpressionNode, attribute: str, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, value: ExpressionNode, attribute: str, line_begin: int):
+        super().__init__(line_begin)
         self.value = value
         self.attribute = attribute
 
 class ConstantNode(ExpressionNode):
-    def __init__(self, value: Any, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, value: Any, type: Literal["nil","boolean","string","number"], line_begin: int):
+        super().__init__(line_begin)
         self.value = str(value)
+        self.type = type
 
 class SliceNode(ExpressionNode):
     def __init__(self, subscript: Any, lower: ExpressionNode | None, upper: ExpressionNode | None, 
-                step: ExpressionNode | None, line_begin: int, function_node: FunctionNode | None):
-            super().__init__(line_begin, function_node)
+                step: ExpressionNode | None, line_begin: int):
+            super().__init__(line_begin)
             self.subscript = subscript
             self.lower = lower
             self.upper = upper
             self.step = step
 class SubscriptNode(ExpressionNode):
-    def __init__(self, value: ExpressionNode, slice: Any, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, value: ExpressionNode, slice: Any, line_begin: int):
+        super().__init__(line_begin)
         self.value = value
         self.slice = slice
 
 class ArgNode(Node):
-    def __init__(self, identifier: str, annotation: ConstantNode | None,
-                 line_begin: int, function_node: FunctionNode):
-        super().__init__(line_begin, function_node)
+    def __init__(self, identifier: str, annotation: ExpressionNode | None,
+                 line_begin: int):
+        super().__init__(line_begin)
         self.identifier = identifier
         self.annotation = annotation
-
 class AssignmentNode(StatementNode):
-    def __init__(self, targets: List[ExpressionNode], value: ExpressionNode, line_begin: int, 
-                 function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, targets: List[ExpressionNode], value: ExpressionNode, line_begin: int):
+        super().__init__(line_begin)
         self.targets = targets
         self.value = value
 
-class Variable(ExpressionNode):
-    def __init__(self, name: str, type: Literal['string', 'number' 'table'] | None, 
-        line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
-        self.name = name
-        self.type = type # None
-        self.function = function # function it belongs to (None = global)
-
 class CallNode(ExpressionNode):
     def __init__(self, value: ExpressionNode, args: List[ExpressionNode], 
-                 attributed_to: Node | None, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+                 attributed_to: Node | None, line_begin: int):
+        super().__init__(line_begin)
         self.value = value
         self.args = args
         self.attributed_to = attributed_to # None if not attributed to something
 
 class IfNode(StatementNode):
     def __init__(self, condition: ExpressionNode, body: List[Node],
-                else_body: List[Node], line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+                else_body: List[Node], line_begin: int):
+        super().__init__(line_begin)
         self.condition = condition
         self.body = body
         self.else_body = else_body
 
 class NameNode(ExpressionNode):
-    def __init__(self, name: str, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, name: str, line_begin: int):
+        super().__init__(line_begin)
         self.name = name
 
 class CompareOperatorNode(ExpressionNode):
-    def __init__(self, operator: str, parenthesis: bool,
-                 function_node: FunctionNode | None):
-        super().__init__(None, function_node)
+    def __init__(self, operator: str, parenthesis: bool):
+        super().__init__(None)
         self.operator = operator
         self.parenthesis = parenthesis
         
-
 class CmpOpEqNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('==', False, function_node)
+    def __init__(self):
+        super().__init__('==', False)
 
 class CmpOpNotEqNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('~=', False, function_node)
+    def __init__(self):
+        super().__init__('~=', False)
 
 class CmpOpLessNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('<', False, function_node)
+    def __init__(self):
+        super().__init__('<', False)
 
 class CmpOpLessEqNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('<=', False, function_node)
+    def __init__(self):
+        super().__init__('<=', False)
 
 class CmpOpGreaterNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('>', False, function_node)
+    def __init__(self):
+        super().__init__('>', False)
 
 class CmpOpGreaterEqNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('>=', False, function_node)
+    def __init__(self):
+        super().__init__('>=', False)
 
 class CmpOpIsNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_is', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_is', True)
 
 class CmpOpIsNotNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('not ropy_is', True, function_node)
+    def __init__(self):
+        super().__init__('not ropy_is', True)
 
 class CmpOpInNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_in', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_in', True)
 
 class CmpOpNotInNode(CompareOperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('not ropy_in', True, function_node)
+    def __init__(self):
+        super().__init__('not ropy_in', True)
 
 class CompareNode(ExpressionNode):
-    def __init__(self, left: ExpressionNode, operators: List[CompareOperatorNode], comparators: List[ExpressionNode], line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, left: ExpressionNode, operators: List[CompareOperatorNode], comparators: List[ExpressionNode], line_begin: int):
+        super().__init__(line_begin)
         self.left = left
         self.operators = operators
         self.comparators = comparators
 
 class OperatorNode(ExpressionNode):
-    def __init__(self, operator: str, line_begin: int, function_node: FunctionNode | None, parenthesis: bool = False):
-        super().__init__(line_begin, function_node)
-        self.operator = operator
+    def __init__(self, value: str, line_begin: int, parenthesis: bool = False):
+        super().__init__(line_begin)
+        self.value = value
         self.parenthesis = parenthesis
 
 class AddNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('+', False, function_node)
+    def __init__(self):
+        super().__init__('+', False)
 
 class SubNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('-', False, function_node)
+    def __init__(self):
+        super().__init__('-', False)
 
 class MultNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('*', False, function_node)
+    def __init__(self):
+        super().__init__('*', False)
 
 class DivNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('/', False, function_node)
+    def __init__(self):
+        super().__init__('/', False)
 
 class ModNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('%', False, function_node)
+    def __init__(self):
+        super().__init__('%', False)
 
 class MatrixMultNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_matrixmult', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_matrixmult', True)
     
 class PowNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_pow', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_pow', True)
 
 class LShiftNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_Lshift', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_Lshift', True)
 
 class RShiftNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_Rshift', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_Rshift', True)
 
 class BitAndNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_bitAnd', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_bitAnd', True)
 
 class BitOrNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_bitOr', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_bitOr', True)
 
 class BitXorNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_bitXor', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_bitXor', True)
 
 class FloorDivNode(OperatorNode):
-    def __init__(self, function_node: FunctionNode | None):
-        super().__init__('ropy_floordiv', True, function_node)
+    def __init__(self):
+        super().__init__('ropy_floordiv', True)
 
 class BinOpNode(ExpressionNode):
-    def __init__(self, left: ExpressionNode, right: ExpressionNode, operator: OperatorNode, line_begin: int, function_node: FunctionNode | None):
-        super().__init__(line_begin, function_node)
+    def __init__(self, left: ExpressionNode, right: ExpressionNode, operator: OperatorNode, line_begin: int):
+        super().__init__(line_begin)
         self.left = left
         self.right = right
         self.operator = operator
+
+class TableNode(ExpressionNode):
+    def __init__(self, keys: List[ExpressionNode], values: List[ExpressionNode],
+                line_begin: int):
+        super().__init__(line_begin)
+        self.keys = keys
+        self.values = values
+
+class WhileNode(StatementNode):
+    def __init__(self, condition: ExpressionNode, body: List[Node],
+                line_begin: int):
+        super().__init__(line_begin)
+        self.condition = condition
+        self.body = body
+
+class YieldNode(ExpressionNode):
+    def __init__(self, value: ExpressionNode | None, line_begin: int):
+        super().__init__(line_begin)
+        self.value = value
+
+class ForNode(StatementNode):
+    def __init__(self, target: ExpressionNode, iterable: ExpressionNode, body: List[Node],
+                line_begin: int):
+        super().__init__(line_begin)
+        self.target = target
+        self.iterable = iterable
+        self.body = body
+
+class DeleteNode(StatementNode):
+    def __init__(self, targets: List[ExpressionNode], line_begin: int):
+        super().__init__(line_begin)
+        self.targets = targets
+
+class AugmentedAssignmentNode(StatementNode):
+    def __init__(self, target: ExpressionNode, operator: OperatorNode, value: ExpressionNode, line_begin: int):
+        super().__init__(line_begin)
+        self.target = target
+        self.operator = operator
+        self.value = value
+
+class ComprehensionNode(Node):
+    def __init__(self, target: ExpressionNode, iterable: ExpressionNode, conditions: List[ExpressionNode], line_begin: int | None):
+        super().__init__(line_begin)
+        self.target = target
+        self.iterable = iterable
+        self.conditions = conditions
+
+class ListCompNode(ExpressionNode):
+    def __init__(self, elt: ExpressionNode, generators: List[ComprehensionNode], line_begin: int):
+        super().__init__(line_begin)
+        self.elt = elt
+        self.generators = generators
