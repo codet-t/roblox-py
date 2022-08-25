@@ -1,14 +1,39 @@
 from typing import Dict, List
 
-import ast as py_ast;
+import ast as py_ast
 
-from ..analysis.build_lua_ast import map_module
+from ..analysis.build_lua_ast import map_module, script_options
 from ..lua_ast import lua_ast_nodes as lua_ast
 
 options: Dict[str, bool] = {
     "toggle_ast": False,
     "toggle_scope_ids": False,
     "toggle_lines": False
+}
+
+builtin_attribute_functions = {
+    "list": {
+        "append": "ropy.append.list"
+    },
+
+    "dict": {
+        "setdefault": "ropy.setdefault.dict",
+    },
+
+    "set": {
+        "add": "ropy.add.set",
+    }
+}
+
+builtin_functions: Dict[str, str | Dict[str, str]] = {
+    "len": "ropy.len",
+    "help": "",
+    "range": "ropy.range",
+    "table_dependent": {
+        "set": "ropy.set",
+        "all": "ropy.all",
+        "slice": "ropy.slice"
+    }
 }
 
 def initialise_string(node: lua_ast.Node) -> str:
@@ -18,48 +43,63 @@ def initialise_string(node: lua_ast.Node) -> str:
         result = result + "--[[" + node.__class__.__name__ + "]]"
 
     if options["toggle_scope_ids"]:
-        result = result + "--[[ ScopeId: " + node.scope.scope_id + "]]";
+        result = result + "--[[ ScopeId: " + node.scope.scope_id + ", ScopeNodeClass: " + node.scope.node.__class__.__name__ + " ]]";
     
     return result;
 
-def compile_if(if_node: lua_ast.IfNode):
-    result = initialise_string(if_node);
+def compile_if(node: lua_ast.IfNode):
+    result = initialise_string(node);
 
-    result = result + "if " + compile_expression(if_node.condition) + " then\n";
-    result = result + compile_lines(if_node.body);
+    result = result + "if " + compile_expression(node.condition) + " then\n";
+    result = result + compile_lines(node.body);
 
-    if if_node.else_body is not None:
-        result = result + if_node.scope.get_offset() + "else\n";
-        result = result + compile_lines(if_node.else_body);
+    if len(node.elseifbody) > 0:
+        for elseif in node.elseifbody:
+            result = result + node.scope.get_offset() + "elseif " + compile_expression(elseif.condition) + " then\n";
+            result = result + compile_lines(elseif.body);
 
-    result = result + if_node.scope.get_offset() + "end";
+            if len(elseif.elsebody) > 0:
+                result = result + node.scope.get_offset() + "else\n";
+                result = result + compile_lines(elseif.elsebody);
+
+    if len(node.elsebody) > 0:
+        result = result + node.scope.get_offset() + "else\n";
+        result = result + compile_lines(node.elsebody);
+
+    result = result + node.scope.get_offset() + "end";
 
     return result;
 
-def compile_function(function_node: lua_ast.FunctionNode) -> str:
-    result: str = initialise_string(function_node);
+def compile_function(node: lua_ast.FunctionNode) -> str:
+    result: str = initialise_string(node);
 
     result = result + "function"
-    if function_node.name is None:
+    if node.name is None:
         result = result + "(";
     else:
-        result = result + " " + function_node.name + "(";
+        result = result + " " + node.name + "(";
 
-    for arg in function_node.args:
+    for arg in node.args:
         result = result + arg.identifier
-        if arg != function_node.args[-1]:
+        if arg != node.args[-1]:
             result = result + ", ";
 
     result = result + ")\n";
 
-    if len(function_node.yields) > 0:
-        # we have to do offset=1 because yield is technically part of the function_node itself
-        result = result + function_node.scope.get_offset(1) + "local yield = {};\n";
+    if len(node.yields) > 0:
+        # we have to do offset=1 because yield is technically part of the node itself
+        result = result + node.scope.get_offset(1) + "local yield = {};\n";
 
-    result = result + compile_lines(function_node.body);
-    result = result + function_node.scope.get_offset() + "end";
+    result = result + compile_lines(node.body);
+
+    if len(node.yields) > 0:
+        # TODO: Check if we aren't encroaching on an existing return,
+        # if so, we just need to convert it to "table.insert(yield, return.value); return yield;"
+        result = result + node.scope.get_offset(1) + "return yield;\n";
     
-    if function_node.scope.scope_id == "0":
+    result = result + node.scope.get_offset() + "end";
+    
+    if node.scope.scope_id == "0":
         result = result + "\n";
 
     return result;
@@ -75,7 +115,10 @@ def compile_constant(constant_node: lua_ast.ConstantNode) -> str:
     result = initialise_string(constant_node);
 
     if constant_node.type == "string":
-        result = result + "\"" + constant_node.value + "\"";
+        if constant_node.value in script_options:
+            result = result + "-- " + constant_node.value
+        else:
+            result = result + "\"" + constant_node.value + "\"";
     else:
         result = result + constant_node.value;
 
@@ -132,46 +175,201 @@ def compile_return(return_node: lua_ast.ReturnNode) -> str:
 
     return result;
 
-def compile_call(call_node: lua_ast.CallNode) -> str:
-    result = initialise_string(call_node);
+def compile_builtin_call(node: lua_ast.CallNode) -> str:
+    if isinstance(node.value, lua_ast.NameNode):
+        name = node.value.name;
+    else:
+        name = compile_expression(node.value);
 
-    result = result + compile_expression(call_node.value);
-    result = result + "(";
+    result = name;
 
-    for arg in call_node.args:
+    new_name = builtin_functions[name];
+
+    if not isinstance(new_name, str):
+        return "";
+
+    result = new_name + "("
+
+    for arg in node.args:
+        result = result + compile_expression(arg)
+        if arg != node.args[-1]:
+            result = result + ", ";
+        
+    result = result + ")";
+
+    return result;
+
+def compile_table_dependent_builtin_call(node: lua_ast.CallNode) -> str:
+    if isinstance(node.value, lua_ast.NameNode):
+        name = node.value.name;
+    else:
+        name = compile_expression(node.value);
+
+    new_name = builtin_functions[name];
+
+    if not isinstance(new_name, str):
+        return "";
+
+    if len(node.args) > 0 and isinstance(node.args[0], lua_ast.TableNode):
+        result = new_name + "." + node.args[0].type + "(";
+    else:
+        result = new_name + ".list(";
+
+    for arg in node.args:
         result = result + compile_expression(arg);
-        if arg != call_node.args[-1]:
+        if arg != node.args[-1]:
             result = result + ", ";
     
     result = result + ")";
 
     return result;
 
+def compile_regular_call(node: lua_ast.CallNode) -> str:
+    if isinstance(node.value, lua_ast.NameNode):
+        name = node.value.name;
+    else:
+        name = compile_expression(node.value);
+
+    result = name;
+    result = result + "(";
+
+    for arg in node.args:
+        result = result + compile_expression(arg);
+        if arg != node.args[-1]:
+            result = result + ", ";
+    
+    result = result + ")";
+
+    return result;
+
+def compile_help_call(node: lua_ast.CallNode) -> str:
+    # Reformulate help(function) to function([nil, nil, nil... (depending on #args) ],"help")
+
+    # Get actual function from func (so we can get args length)
+    func: lua_ast.FunctionNode = node.scope.get_function().node;
+    
+    # Get amount of possible parameters
+    num_args = len(func.args);
+
+    # Check if func.name is possible
+    if func.name is None:
+        raise Exception("Tried to call help on an anonymous function");
+
+    result = func.name + "(" + ", ".join(["nil"]) * num_args + ",\"help\"";
+
+    # Replace only first instance of "help" with func.name
+    result = result.replace("help", func.name, 1);
+
+    result = result + ")";
+
+    return result;
+
+def compile_attributed_builtin_call(node: lua_ast.CallNode) -> str:
+    if not isinstance(node.value, lua_ast.AttributeNode):
+        raise Exception("Tried to call attributed builtin on non-attribute node");
+
+    result = "";
+
+    # See if node.value.value is a table
+    if isinstance(node.value.attributed_to, lua_ast.TableNode):
+        method_type = node.value.attributed_to.type
+        methods = builtin_attribute_functions[method_type];
+
+        if node.value.attribute not in methods:
+            raise Exception("Tried to call attributed builtin (" + node.value.attribute + ") on unknown method");
+
+        result = methods[node.value.attribute] + "(";
+    elif isinstance(node.value.attributed_to, lua_ast.NameNode) or isinstance(node.value.attributed_to, lua_ast.CallNode):
+        # Loop through all attributes in built_in_attributes
+        for type in builtin_attribute_functions:
+            # Loop through these
+            for method in builtin_attribute_functions[type]:
+                # Check if method == node.value.name
+                if method == node.value.attribute:
+                    result = builtin_attribute_functions[type][method] + "(";
+    else: 
+        raise Exception("Tried to call attributed builtin on unsupported node (" + node.value.attributed_to.__class__.__name__ + ")");
+
+    result = result + compile_expression(node.value.attributed_to);
+
+    if len(node.args) > 0:
+        result = result + ", ";
+        for arg in node.args:
+            result = result + compile_expression(arg);
+            if arg != node.args[-1]:
+                result = result + ", ";
+
+    result = result + ")";
+
+    return result;
+
+def compile_call(node: lua_ast.CallNode) -> str:
+    result = initialise_string(node);
+
+    if isinstance(node.value, lua_ast.NameNode):
+        name = node.value.name;
+    else:
+        name = compile_expression(node.value);
+
+    builtin: bool = (name in builtin_functions) or (name in builtin_functions["table_dependent"]);
+    attribute: bool = isinstance(node.value, lua_ast.AttributeNode);
+    
+    if name == "help":
+        return result + compile_help_call(node);
+    elif attribute:
+        return result + compile_attributed_builtin_call(node);
+    elif builtin:
+        if name in builtin_functions:
+            return result + compile_builtin_call(node);
+        else:
+            return result + compile_table_dependent_builtin_call(node);
+    else:
+        return result + compile_regular_call(node);
+
 def compile_subscript(subscript_node: lua_ast.SubscriptNode) -> str:
     result = initialise_string(subscript_node);
 
-    if isinstance(subscript_node.value, lua_ast.BinOpNode):
+    if not hasattr(subscript_node.slice, "lower"):
+        # Follow lua syntax: value + "[" + slice + "]"
         result = result + compile_expression(subscript_node.value);
-    elif isinstance(subscript_node.value, lua_ast.SliceNode):
-        # If slice.lower is => 0, and slice.upper&step is None, then it is a normal subscript
-        # That is to say, value[slice.lower] is OK
-        lower = compile_expression(subscript_node.slice.lower)
+        result = result + "[";
+        result = result + compile_expression(subscript_node.slice);
+        if not "@ropy:ignore_table_offset" in subscript_node.scope.options:
+            result = result + " + 1";
+        result = result + "]";
+        return result;
 
-        if lower.isnumeric() and int(lower) >= 0 and subscript_node.slice.upper is None and subscript_node.slice.step is None:
-            result = result + compile_expression(subscript_node.value);
-            result = result + "[" + compile_expression(subscript_node.slice.lower) + "]";
-        else:
-            # We need to use the ropy.slice function
-            upper = compile_expression(subscript_node.slice.upper) if subscript_node.slice.upper is not None else "nil";
-            step = compile_expression(subscript_node.slice.step) if subscript_node.slice.step is not None else "nil";
-
-            result = result + "roblox.slice(";
-            result = result + compile_expression(subscript_node.value);
-            result = result + ", " + lower + ", " + upper + ", " + step + ")";
-    elif isinstance(subscript_node.value, lua_ast.NameNode):
-        result = result + compile_expression(subscript_node.value);
+    # ropy.slice.tuple(value, slice.lower or "nil", slice.upper or "nil", slice.step or "nil")
+    if isinstance(subscript_node.value, lua_ast.TableNode):
+        function_name = "ropy.slice." + subscript_node.value.type;
     else:
-        raise Exception("Unknown subscript value type: " + str(type(subscript_node.value)));
+        function_name = "ropy.slice.list";
+
+    result = result + function_name + "(";
+    result = result + compile_expression(subscript_node.value);
+
+    result = result + ", ";
+
+    if hasattr(subscript_node.slice, "lower") and subscript_node.slice.lower is not None:
+        result = result + compile_expression(subscript_node.slice.lower);
+    else:
+        result = result + "nil";
+
+    result = result + ", ";
+
+    if hasattr(subscript_node.slice, "upper") and subscript_node.slice.upper is not None:
+        result = result + compile_expression(subscript_node.slice.upper);
+    else:
+        result = result + "nil";
+
+    result = result + ", ";
+
+    if hasattr(subscript_node.slice, "step") and subscript_node.slice.step is not None:
+        result = result + compile_expression(subscript_node.slice.step);
+    else:
+        result = result + "nil";
+
+    result = result + ")";
 
     return result;
 
@@ -279,7 +477,7 @@ def compile_for(node: lua_ast.ForNode) -> str:
 def compile_attribute(attribute_node: lua_ast.AttributeNode) -> str:
     result = initialise_string(attribute_node);
 
-    result = result + compile_expression(attribute_node.value);
+    result = result + compile_expression(attribute_node.attributed_to);
     result = result + "." + attribute_node.attribute;
     
     return result;
@@ -314,6 +512,8 @@ def compile_augmentedassignment(node: lua_ast.AugmentedAssignmentNode) -> str:
         result = result + ")";
     else:
         result = result + compile_expression(node.target);
+        result = result + " = "
+        result = result + compile_expression(node.target);
         result = result + " " + node.operator.value + " ";
         result = result + compile_expression(node.value);
     
@@ -321,22 +521,22 @@ def compile_augmentedassignment(node: lua_ast.AugmentedAssignmentNode) -> str:
 
 def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode]) -> str:
     result = "";
-    layers: int = 0;
+    layers: int = 1;
 
     for i in range(0, len(comprehensions_nodes)):
         comprehension_node = comprehensions_nodes[i];
 
         result = result + initialise_string(comprehension_node);
 
-        result = result + "(for k,"
+        result = result + comprehension_node.scope.get_offset() + "(function()\n"
+        result = result + comprehension_node.scope.get_offset(layers) + "local result = {}\n"
+        result = result + comprehension_node.scope.get_offset(1) + "for k,"
         result = result + compile_expression(comprehension_node.target);
         result = result + " in pairs(";
         result = result + compile_expression(comprehension_node.iterable);
         result = result + ") do\n";
 
         layers += 1;
-
-        result = result + comprehension_node.scope.get_offset(layers) + "local result = {}\n"
 
         length = len(comprehension_node.conditions);
 
@@ -366,11 +566,13 @@ def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode]
 
         result = result + comprehension_node.scope.get_offset(layers) + "table.insert(result, ";
         result = result + compile_expression(comprehension_node.target);
-        result = result + ")\n";
+        result = result + ")\n"
+        result = result + comprehension_node.scope.get_offset(layers-1) + "end\n"
+        result = result + comprehension_node.scope.get_offset(layers-1) + "return result\n"
+        result = result + comprehension_node.scope.get_offset(layers-2) + "end)()\n"
+
 
         layers -= 1
-
-        result = result + comprehension_node.scope.get_offset(layers) + "end)\n";
 
     return result;
 
@@ -478,10 +680,11 @@ def compile_lines(nodes: List[lua_ast.Node]) -> str:
 
     return result;
 
+prefix = "-- Compiled with roblox-py:\n-- https://github.com/codetariat/roblox-py\n\nlocal ropy = require(game:FindFirstChild('ropy', true))\n\n"
+
 def compile_module(module_node: py_ast.Module) -> str:
     compiled_module_node = map_module(module_node);
 
-    prefix = "-- Compiled with roblox-py:\n-- https://github.com/codetariat/roblox-py\n\n"
     result = prefix + compile_lines(compiled_module_node.body)
 
     # Check if last char is \n and remove it if it is

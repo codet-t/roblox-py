@@ -8,11 +8,17 @@ from ..lua_ast import lua_ast_nodes as lua_ast
 
 from ..scope import LuaScope
 
+script_options: List[str] = [
+    "@ropy:ignore_table_offset"
+]
+
 def map_functiondef(pynode: py_ast.FunctionDef, scope: LuaScope) -> lua_ast.FunctionNode:
     decorators: List[str] = [];
 
     for decorator in pynode.decorator_list:
         decorators.append(decorator.id);  # type: ignore
+    
+    new_scope = scope.add_child(None);
     
     new_function_node = lua_ast.FunctionNode(
         pynode.name,
@@ -26,8 +32,9 @@ def map_functiondef(pynode: py_ast.FunctionDef, scope: LuaScope) -> lua_ast.Func
         pynode.lineno,
     );
 
+    new_scope.node = new_function_node;
+
     new_function_node.scope = scope;
-    new_scope = scope.add_child(new_function_node);
 
     return_annotation: lua_ast.ExpressionNode | None = None;
 
@@ -69,15 +76,43 @@ def map_assignment(pynode: py_ast.Assign, scope: LuaScope) -> lua_ast.Assignment
     return assignment_node;
 
 def map_if(pynode: py_ast.If, scope: LuaScope) -> lua_ast.IfNode:
+    new_scope = scope.add_child(None);
+
+    current_node = pynode;
+
     if_node = lua_ast.IfNode(
-        map_expression(pynode.test, scope),
-        map_statements(pynode.body, scope),
-        map_statements(pynode.orelse, scope),
-        pynode.lineno);
+        map_expression(pynode.test, new_scope),
+        map_statements(pynode.body, new_scope),
+        [],
+        [],
+        pynode.lineno,
+    );
 
-    new_scope = scope.add_child(if_node);
+    if not isinstance(pynode.orelse[0], py_ast.If):
+        new_new_scope = scope.add_child(if_node);
+        if_node.elsebody = map_statements(pynode.orelse, new_new_scope);
 
-    if_node.scope = new_scope;
+    new_scope.node = if_node;
+    if_node.scope = scope;
+
+    while True:
+        if not isinstance(current_node.orelse[0], py_ast.If):
+            break;
+        
+        current_node = current_node.orelse[0];
+
+        newer_scope = scope.add_child(None);
+        
+        elseif_node = lua_ast.ElseIfNode(
+            map_expression(current_node.test, newer_scope),
+            map_statements(current_node.body, newer_scope),
+            map_statements(current_node.orelse, newer_scope),
+            current_node.lineno
+        );
+
+        newer_scope.node = elseif_node;
+        elseif_node.scope = scope;
+        if_node.elseifbody.append(elseif_node);
 
     return if_node;
 
@@ -120,35 +155,43 @@ def map_constant(pynode: py_ast.Constant, scope: LuaScope) -> lua_ast.ConstantNo
     # Check if value is a string (i.e begins and ends with ')
     else:
         type = "string";
+        if pynode.value in script_options:
+            scope.apply_option(pynode.value);
 
     constant_node = lua_ast.ConstantNode(pynode.value, type, pynode.lineno);
     constant_node.scope = scope;
 
     return constant_node
 
-def map_compareop(op: py_ast.cmpop, scope: LuaScope) -> lua_ast.CompareOperatorNode:
-    if isinstance(op, py_ast.Eq):
-        return lua_ast.CmpOpEqNode();
-    elif isinstance(op, py_ast.NotEq):
-        return lua_ast.CmpOpNotEqNode();
-    elif isinstance(op, py_ast.Lt):
-        return lua_ast.CmpOpLessNode();
-    elif isinstance(op, py_ast.LtE):
-        return lua_ast.CmpOpLessEqNode();
-    elif isinstance(op, py_ast.Gt):
-        return lua_ast.CmpOpGreaterNode();
-    elif isinstance(op, py_ast.GtE):
-        return lua_ast.CmpOpGreaterEqNode();
-    elif isinstance(op, py_ast.Is):
-        return lua_ast.CmpOpIsNode();
-    elif isinstance(op, py_ast.IsNot):
-        return lua_ast.CmpOpIsNotNode();
-    elif isinstance(op, py_ast.In):
-        return lua_ast.CmpOpInNode();
-    elif isinstance(op, py_ast.NotIn):
-        return lua_ast.CmpOpNotInNode();
+def map_compareop(pynode: py_ast.cmpop, scope: LuaScope) -> lua_ast.CompareOperatorNode:
+    new_node: lua_ast.CompareOperatorNode;
+
+    if isinstance(pynode, py_ast.Eq):
+        new_node = lua_ast.CmpOpEqNode();
+    elif isinstance(pynode, py_ast.NotEq):
+        new_node = lua_ast.CmpOpNotEqNode();
+    elif isinstance(pynode, py_ast.Lt):
+        new_node = lua_ast.CmpOpLessNode();
+    elif isinstance(pynode, py_ast.LtE):
+        new_node = lua_ast.CmpOpLessEqNode();
+    elif isinstance(pynode, py_ast.Gt):
+        new_node = lua_ast.CmpOpGreaterNode();
+    elif isinstance(pynode, py_ast.GtE):
+        new_node = lua_ast.CmpOpGreaterEqNode();
+    elif isinstance(pynode, py_ast.Is):
+        new_node = lua_ast.CmpOpIsNode();
+    elif isinstance(pynode, py_ast.IsNot):
+        new_node = lua_ast.CmpOpIsNotNode();
+    elif isinstance(pynode, py_ast.In):
+        new_node = lua_ast.CmpOpInNode();
+    elif isinstance(pynode, py_ast.NotIn):
+        new_node = lua_ast.CmpOpNotInNode();
     else:
-        raise Exception("Unknown compare op " + str(type(op)));
+        raise Exception("Unknown compare op " + str(type(pynode)));
+    
+    new_node.scope = scope;
+    
+    return new_node;
 
 def map_compare(pynode: py_ast.Compare, scope: LuaScope) -> lua_ast.CompareNode:
     comparators: List[lua_ast.ExpressionNode] = [];
@@ -160,12 +203,16 @@ def map_compare(pynode: py_ast.Compare, scope: LuaScope) -> lua_ast.CompareNode:
 
     for operator in pynode.ops:
         operators.append(map_compareop(operator, scope));
-    
-    return lua_ast.CompareNode(
+
+    new_node = lua_ast.CompareNode(
         map_expression(pynode.left, scope),
         operators,
         comparators,
         pynode.lineno);
+
+    new_node.scope = scope;
+    
+    return new_node
 
 def map_operator(pynode: py_ast.operator, scope: LuaScope) -> lua_ast.OperatorNode:
     if isinstance(pynode, py_ast.Add):
@@ -196,11 +243,15 @@ def map_operator(pynode: py_ast.operator, scope: LuaScope) -> lua_ast.OperatorNo
     raise Exception("Unknown operator " + str(type(pynode)));
 
 def map_binop(pynode: py_ast.BinOp, scope: LuaScope) -> lua_ast.BinOpNode:
-    return lua_ast.BinOpNode(
+    new_node = lua_ast.BinOpNode(
         map_expression(pynode.left, scope),
         map_expression(pynode.right, scope),
         map_operator(pynode.op, scope),
         pynode.lineno);
+
+    new_node.scope = scope;
+
+    return new_node
 
 def map_argument(pynode: py_ast.arg, scope: LuaScope) -> lua_ast.ArgNode:
     annotation: lua_ast.ExpressionNode | None = None;
@@ -248,11 +299,36 @@ def map_dict(pynode: py_ast.Dict, scope: LuaScope) -> lua_ast.TableNode:
             keys.append(map_expression(key, scope));
 
     values = map_expressions(pynode.values, scope);
-    
-    return lua_ast.TableNode(
+
+    new_node = lua_ast.TableNode(
         keys,
         values,
-        pynode.lineno);
+        "dict",
+        pynode.lineno
+    );
+
+    new_node.scope = scope;
+    
+    return new_node;
+
+def map_list(pynode: py_ast.List, scope: LuaScope) -> lua_ast.TableNode:
+    result: Dict[lua_ast.ExpressionNode, lua_ast.ExpressionNode] = {};
+
+    for index, value in enumerate(pynode.elts):
+        constant_node = lua_ast.ConstantNode(index, "number", pynode.lineno)
+        constant_node.scope = scope;
+        result[constant_node] = map_expression(value, scope);
+
+    # keys
+    keys = list(result.keys());
+
+    # values
+    values = list(result.values());
+
+    new_node = lua_ast.TableNode(keys, values, "list", pynode.lineno);
+    new_node.scope = scope;
+
+    return new_node
 
 def map_subscript(pynode: py_ast.Subscript, scope: LuaScope) -> lua_ast.SubscriptNode:
     new_subscript_node = lua_ast.SubscriptNode(
@@ -268,18 +344,22 @@ def map_subscript(pynode: py_ast.Subscript, scope: LuaScope) -> lua_ast.Subscrip
         new_subscript_node.slice = map_name(pynode.slice, scope);
     else:
         raise Exception("Unknown slice type " + str(type(pynode.slice)));
+    
+    new_subscript_node.scope = scope;
 
     return new_subscript_node;
 
 def map_while(pynode: py_ast.While, scope: LuaScope) -> lua_ast.WhileNode:
+    new_scope = scope.add_child(None);
+    
     while_node = lua_ast.WhileNode(
-        map_expression(pynode.test, scope),
-        map_nodes(pynode.body, scope),
+        map_expression(pynode.test, new_scope),
+        map_nodes(pynode.body, new_scope),
         pynode.lineno);
 
-    new_scope = scope.add_child(while_node);
+    new_scope.node = while_node;
 
-    while_node.scope = new_scope;
+    while_node.scope = scope;
 
     return while_node;
 
@@ -292,6 +372,7 @@ def map_yield(pynode: py_ast.Yield, scope: LuaScope) -> lua_ast.YieldNode:
     yield_node = lua_ast.YieldNode(
         value,
         pynode.lineno);
+
     yield_node.scope = scope;
 
     function_scope = scope.get_function()
@@ -301,42 +382,30 @@ def map_yield(pynode: py_ast.Yield, scope: LuaScope) -> lua_ast.YieldNode:
     
     return yield_node;
 
-def map_list(pynode: py_ast.List, scope: LuaScope) -> lua_ast.TableNode:
-    result: Dict[lua_ast.ExpressionNode, lua_ast.ExpressionNode] = {};
-
-    for index, value in enumerate(pynode.elts):
-        constant_node = lua_ast.ConstantNode(index, "number", pynode.lineno)
-        constant_node.scope = scope;
-        result[constant_node] = map_expression(value, scope);
-
-    # keys
-    keys = list(result.keys());
-
-    # values
-    values = list(result.values());
-    
-    return lua_ast.TableNode(keys, values, pynode.lineno);
-
 def map_for(pynode: py_ast.For, scope: LuaScope) -> lua_ast.ForNode:
+    new_scope = scope.add_child(None);
+
     for_node = lua_ast.ForNode(
-        map_expression(pynode.target, scope),
-        map_expression(pynode.iter, scope),
-        map_nodes(pynode.body, scope),
+        map_expression(pynode.target, new_scope),
+        map_expression(pynode.iter, new_scope),
+        map_nodes(pynode.body, new_scope),
         pynode.lineno
     );
 
-    new_scope = scope.add_child(for_node);
-
-    for_node.scope = new_scope;
+    for_node.scope = scope;
+    new_scope.node = for_node;
 
     return for_node
 
 def map_attribute(pynode: py_ast.Attribute, scope: LuaScope) -> lua_ast.AttributeNode:
-    return lua_ast.AttributeNode(
+    new_node = lua_ast.AttributeNode(
         map_expression(pynode.value, scope),
         pynode.attr,
         pynode.lineno
     );
+    new_node.scope = scope;
+
+    return new_node
 
 def map_delete(pynode: py_ast.Delete, scope: LuaScope) -> lua_ast.DeleteNode:
     delete_node = lua_ast.DeleteNode(
@@ -381,11 +450,15 @@ def map_listcomp(pynode: py_ast.ListComp, scope: LuaScope) -> lua_ast.ListCompNo
     for generator in pynode.generators:
         generators.append(map_comprehension(generator, scope));
 
-    return lua_ast.ListCompNode(
+    new_node = lua_ast.ListCompNode(
         map_expression(pynode.elt, scope),
         generators,
         pynode.lineno
     );
+
+    new_node.scope = scope;
+
+    return new_node
 
 # Selector function
 def map_expression(expression: py_ast.expr, scope: LuaScope) -> lua_ast.ExpressionNode:

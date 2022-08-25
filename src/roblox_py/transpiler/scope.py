@@ -48,25 +48,27 @@ class LuaScope(Scope):
                         parent: Self | None = None):
         from .lua_ast.lua_ast_nodes import Variable as LuaVariable;
         super().__init__(scope_id, node);
-        self.options = [];
+        self.options: List[str] = [];
         self.variables: List[LuaVariable] = [];
         self.parent = parent;
 
     def get_function(self) -> Self:
         from .lua_ast.lua_ast_nodes import FunctionNode as LuaFunction;
-        if isinstance(self.node, LuaFunction): return self;
+
+        if isinstance(self.node, LuaFunction):
+            return self;
 
         if self.parent is None:
             return self;
 
         ancestor: Self = self.parent;
 
-        while ancestor is not None and ancestor.scope_id != "0" and isinstance(ancestor.node, LuaFunction):
-            if ancestor.parent is None: 
+        while ancestor is not None and ancestor.scope_id != "0" and not isinstance(ancestor.node, LuaFunction):
+            if ancestor.parent is None:
                 break
             else:
                 ancestor = ancestor.parent;
-
+        
         return ancestor;
 
     from .lua_ast.lua_ast_nodes import Variable as LuaVariable;
@@ -97,6 +99,8 @@ class LuaScope(Scope):
 
         # Create a new scope
         new_scope = LuaScope(new_id, node);
+        new_scope.parent = self;
+        new_scope.options = self.options;
 
         # If node is not None, set the node of the scope
         if node is not None: new_scope.node = node;
@@ -109,6 +113,12 @@ class LuaScope(Scope):
         self.children = children;
 
         return new_scope;
+    
+    def apply_option(self, option: str) -> None:
+        self.options.append(option);
+        
+        for child in self.children:
+            child.apply_option(option); # type: ignore
 
 class PyVariableDict(TypedDict):
     direct: bool;

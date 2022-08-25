@@ -3,6 +3,7 @@ import json
 import time
 
 import src.roblox_py.transpiler.transpiler as transpiler
+from .transpiler.compile.compile_from_ast import prefix;
 
 settings = {};
 
@@ -63,7 +64,9 @@ def transpile(folder_origin: str, folder_destination: str, ropy_module_directory
     empty = 0;
 
     for file in transpilation_results:
-        if transpilation_results[file] == "" or transpilation_results[file] == None:
+        res = transpilation_results[file];
+
+        if res is None or len(res) <= len(prefix):
             empty += 1;
             continue;
 

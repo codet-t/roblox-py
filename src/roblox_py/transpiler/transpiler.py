@@ -84,16 +84,21 @@ def transpile_folder(folder_origin: str, folder_destination: str, ropy_module_de
     
     # Create and write the results to the destination folder
     for file_name in results:
-        name_without_root = full_name.replace(folder_origin + "\\", "");
+        name_without_root = file_name.replace(folder_origin + "\\", "");
 
         new_file_name = os.path.join(folder_destination_full_name, name_without_root)
 
         # Replace the last .py with .lua
         new_file_name = string_util.replace_reverse(new_file_name, ".py", ".lua", 1);
 
-        os.makedirs(os.path.dirname(new_file_name), exist_ok=True)
-        with open(new_file_name, "w") as f:
-            f.write(results[file_name] or "")
+        # Create the dirs if they don't exist
+        if not os.path.exists(os.path.dirname(new_file_name)):
+            os.makedirs(os.path.dirname(new_file_name));
+        
+        # Write the file
+        with open(new_file_name, "w") as file:
+            file.write(results[file_name] or "");
+            file.close();
 
     ropy_module_destination = ropy_module_destination.replace("/", "\\");
     # Clone ropy_module.lua to ropy_module_destination with the name "ropy.lua", if not exists

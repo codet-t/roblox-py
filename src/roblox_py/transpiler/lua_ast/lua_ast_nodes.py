@@ -26,7 +26,7 @@ class StatementNode(Node):
 class FunctionNode(StatementNode):
     def __init__(self, name: str | None, args: List[Any],
                  body: List[Any], decorators: List[str], return_annotation: Any,
-                 is_lambda: bool, variables: List[Any], yields: List[Node | None],
+                 is_lambda: bool, variables: List[Any], yields: List[Node],
                  line_begin: int):
         self.name = name # None if anonymous
         self.args = args
@@ -49,9 +49,9 @@ class ReturnNode(StatementNode):
         self.value = value
 
 class AttributeNode(ExpressionNode):
-    def __init__(self, value: ExpressionNode, attribute: str, line_begin: int):
+    def __init__(self, attributed_to: ExpressionNode, attribute: str, line_begin: int):
         super().__init__(line_begin)
-        self.value = value
+        self.attributed_to = attributed_to
         self.attribute = attribute
 
 class ConstantNode(ExpressionNode):
@@ -94,13 +94,22 @@ class CallNode(ExpressionNode):
         self.args = args
         self.attributed_to = attributed_to # None if not attributed to something
 
-class IfNode(StatementNode):
+class ElseIfNode(StatementNode):
     def __init__(self, condition: ExpressionNode, body: List[Node],
-                else_body: List[Node], line_begin: int):
+                elsebody: List[Node], line_begin: int):
         super().__init__(line_begin)
         self.condition = condition
         self.body = body
-        self.else_body = else_body
+        self.elsebody = elsebody
+
+class IfNode(StatementNode):
+    def __init__(self, condition: ExpressionNode, body: List[Node],
+                elsebody: List[Node], elseifbody: List[ElseIfNode], line_begin: int):
+        super().__init__(line_begin)
+        self.condition = condition
+        self.body = body
+        self.elsebody = elsebody
+        self.elseifbody = elseifbody
 
 class NameNode(ExpressionNode):
     def __init__(self, name: str, line_begin: int):
@@ -147,11 +156,11 @@ class CmpOpIsNotNode(CompareOperatorNode):
 
 class CmpOpInNode(CompareOperatorNode):
     def __init__(self):
-        super().__init__('ropy_in', True)
+        super().__init__('ropy.operator_in', True)
 
 class CmpOpNotInNode(CompareOperatorNode):
     def __init__(self):
-        super().__init__('not ropy_in', True)
+        super().__init__('not ropy.operator_in', True)
 
 class CompareNode(ExpressionNode):
     def __init__(self, left: ExpressionNode, operators: List[CompareOperatorNode], comparators: List[ExpressionNode], line_begin: int):
@@ -227,10 +236,12 @@ class BinOpNode(ExpressionNode):
 
 class TableNode(ExpressionNode):
     def __init__(self, keys: List[ExpressionNode], values: List[ExpressionNode],
+                type: Literal['list'] | Literal['dict'] | Literal['set'] | Literal['tuple'],
                 line_begin: int):
         super().__init__(line_begin)
         self.keys = keys
         self.values = values
+        self.type = type;
 
 class WhileNode(StatementNode):
     def __init__(self, condition: ExpressionNode, body: List[Node],
