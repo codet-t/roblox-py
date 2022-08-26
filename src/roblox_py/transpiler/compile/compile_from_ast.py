@@ -1,3 +1,4 @@
+from tkinter.messagebox import NO
 from typing import Dict, List
 
 import ast as py_ast
@@ -32,7 +33,8 @@ builtin_functions: Dict[str, str | Dict[str, str]] = {
     "table_dependent": {
         "set": "ropy.set",
         "all": "ropy.all",
-        "slice": "ropy.slice"
+        "slice": "ropy.slice",
+        "set": "ropy.set"
     }
 }
 
@@ -73,6 +75,8 @@ def compile_if(node: lua_ast.IfNode):
 def compile_function(node: lua_ast.FunctionNode) -> str:
     result: str = initialise_string(node);
 
+    has_help = len(node.body) > 0 and isinstance(node.body[0], lua_ast.ConstantNode) and node.body[0].type == "string";
+
     result = result + "function"
     if node.name is None:
         result = result + "(";
@@ -83,11 +87,22 @@ def compile_function(node: lua_ast.FunctionNode) -> str:
         result = result + arg.identifier
         if arg != node.args[-1]:
             result = result + ", ";
+    
+    if has_help:
+        if len(node.args) == 0:
+            result = result + "_ropy_help"
+        else:
+            result = result + ", _ropy_help"
 
     result = result + ")\n";
 
+    if has_help:
+        result = result + node.scope.get_offset(1) + 'if _ropy_help == "help" then return "' + node.body[0].value + '" end\n'
+        # Remove first object from node.body
+        node.body.pop(0);
+
     if len(node.yields) > 0:
-        # we have to do offset=1 because yield is technically part of the node itself
+        # we have to do offset=1 because the node.scope technically begins at the function line
         result = result + node.scope.get_offset(1) + "local yield = {};\n";
 
     result = result + compile_lines(node.body);
@@ -204,11 +219,10 @@ def compile_table_dependent_builtin_call(node: lua_ast.CallNode) -> str:
         name = node.value.name;
     else:
         name = compile_expression(node.value);
-
-    new_name = builtin_functions[name];
-
-    if not isinstance(new_name, str):
-        return "";
+    
+    new_name = builtin_functions["table_dependent"];
+    if isinstance(new_name, dict):
+        new_name = new_name[name];
 
     if len(node.args) > 0 and isinstance(node.args[0], lua_ast.TableNode):
         result = new_name + "." + node.args[0].type + "(";
@@ -246,7 +260,22 @@ def compile_help_call(node: lua_ast.CallNode) -> str:
     # Reformulate help(function) to function([nil, nil, nil... (depending on #args) ],"help")
 
     # Get actual function from func (so we can get args length)
-    func: lua_ast.FunctionNode = node.scope.get_function().node;
+    func = None;
+
+    func_wanted_name = node.args[0]
+
+    if isinstance(func_wanted_name, lua_ast.NameNode):
+        func_wanted_name = func_wanted_name.name;
+
+    # Loop through scope.functions
+    if isinstance(node.value, lua_ast.NameNode):
+        for f in node.scope.functions:
+            if f.name == func_wanted_name:
+                func = f;
+                break;
+    
+    if func is None:
+        return "'Failed'";
     
     # Get amount of possible parameters
     num_args = len(func.args);
@@ -257,8 +286,8 @@ def compile_help_call(node: lua_ast.CallNode) -> str:
 
     result = func.name + "(" + ", ".join(["nil"]) * num_args + ",\"help\"";
 
-    # Replace only first instance of "help" with func.name
-    result = result.replace("help", func.name, 1);
+    # Replace "help(" with func.name
+    result = result.replace("help(", func.name, 1);
 
     result = result + ")";
 
@@ -400,7 +429,7 @@ def compile_assignment(assignment_node: lua_ast.AssignmentNode) -> str:
     # Target1 = Value1; Target2 = Value1; Target3 = Value1; etc...
     value = compile_expression(assignment_node.value);
 
-    function_scope = assignment_node.scope.get_function();
+    function_scope = assignment_node.scope.get_function_scope();
 
     for i in range(0, len(assignment_node.targets)):
         target = assignment_node.targets[i];
@@ -423,16 +452,26 @@ def compile_assignment(assignment_node: lua_ast.AssignmentNode) -> str:
 def compile_table(table_node: lua_ast.TableNode) -> str:
     result = initialise_string(table_node);
 
-    result = result + "{";
-    for i in range(0, len(table_node.keys)):
-        key = table_node.keys[i];
-        value = table_node.values[i];
-        # key = value
-        result = result + "[" + compile_expression(key) + "] = ";
-        result = result + compile_expression(value);
-        if i < len(table_node.keys) - 1:
-            result = result + ", ";
-    result = result + "}";
+    if table_node.type == "dict":
+        result = result + "{";
+        for i in range(0, len(table_node.keys)):
+            key = table_node.keys[i];
+            value = table_node.values[i];
+            # key = value
+            result = result + "[" + compile_expression(key) + "] = ";
+            result = result + compile_expression(value);
+            if i < len(table_node.keys) - 1:
+                result = result + ", ";
+        result = result + "}";
+    else:
+        # {1, 2, 3, ...}
+        result = result + "{";
+        for i in range(0, len(table_node.values)):
+            value = table_node.values[i];
+            result = result + compile_expression(value);
+            if i < len(table_node.values) - 1:
+                result = result + ", ";
+        result = result + "}";
 
     return result;
 
@@ -464,7 +503,7 @@ def compile_yield(yield_node: lua_ast.YieldNode) -> str:
 def compile_for(node: lua_ast.ForNode) -> str:
     result = initialise_string(node);
 
-    result = result + "for ";
+    result = result + "for key, ";
     result = result + compile_expression(node.target);
     result = result + " in ";
     result = result + compile_expression(node.iterable);
@@ -519,22 +558,24 @@ def compile_augmentedassignment(node: lua_ast.AugmentedAssignmentNode) -> str:
     
     return result;
 
-def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode]) -> str:
+def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode],
+    complimentary_nodes: lua_ast.ListCompNode | lua_ast.GeneratorExpNode ) -> str:
     result = "";
     layers: int = 1;
+
+    result = result + initialise_string(complimentary_nodes);
+
+    result = result + complimentary_nodes.scope.get_offset(0) + "(function()\n"
+    result = result + complimentary_nodes.scope.get_offset(layers) + "local result = {}\n"
 
     for i in range(0, len(comprehensions_nodes)):
         comprehension_node = comprehensions_nodes[i];
 
-        result = result + initialise_string(comprehension_node);
-
-        result = result + comprehension_node.scope.get_offset() + "(function()\n"
-        result = result + comprehension_node.scope.get_offset(layers) + "local result = {}\n"
-        result = result + comprehension_node.scope.get_offset(1) + "for k,"
+        result = result + comprehension_node.scope.get_offset(layers) + "for k,"
         result = result + compile_expression(comprehension_node.target);
         result = result + " in pairs(";
         result = result + compile_expression(comprehension_node.iterable);
-        result = result + ") do\n";
+        result = result + ") do\n";    
 
         layers += 1;
 
@@ -564,47 +605,42 @@ def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode]
 
             layers += 1;
 
-        result = result + comprehension_node.scope.get_offset(layers) + "table.insert(result, ";
-        result = result + compile_expression(comprehension_node.target);
-        result = result + ")\n"
-        result = result + comprehension_node.scope.get_offset(layers-1) + "end\n"
-        result = result + comprehension_node.scope.get_offset(layers-1) + "return result\n"
-        result = result + comprehension_node.scope.get_offset(layers-2) + "end)()\n"
+    result = result + complimentary_nodes.scope.get_offset(layers) + "table.insert(result, ";
+    result = result + compile_expression(complimentary_nodes.elt);
+    result = result + ")\n"
 
-
+    for i in range(0, layers):
+        if layers == 1: continue;
+        result = result + complimentary_nodes.scope.get_offset(layers-1) + "end\n";
         layers -= 1
 
-    return result;
+    result = result + complimentary_nodes.scope.get_offset(layers) + "return result\n"
+    result = result + complimentary_nodes.scope.get_offset(layers-1) + "end)()"
 
-def compile_comprehension(comprehension_node: lua_ast.ComprehensionNode) -> str:
-    result = initialise_string(comprehension_node);
-
-    result = result + "for k,"
-    result = result + compile_expression(comprehension_node.target);
-    result = result + " in pairs(";
-    result = result + compile_expression(comprehension_node.iterable);
-    result = result + ") do\n";
-    result = result + comprehension_node.scope.get_offset(1) + "local result = {}"
-
-    if len(comprehension_node.conditions) == 0:
-        result = result + comprehension_node.scope.get_offset(1) + "table.insert(result, " + compile_expression(comprehension_node.target) + ")";
-    #else:
-    for condition in comprehension_node.conditions:
-        result = result + comprehension_node.scope.get_offset(1) + "if " + compile_expression(condition) + " then\n";
-        
-        result = result + comprehension_node.scope.get_offset(2) + "table.insert(result, " + compile_expression(comprehension_node.target) + ")";
-
-        result = result + comprehension_node.scope.get_offset(1) + "end\n";
-
-    result = result + comprehension_node.scope.get_offset() + "end\n";
 
     return result;
 
-def compile_listcomp(listcomp_node: lua_ast.ListCompNode) -> str:
-    result = initialise_string(listcomp_node);
+def compile_listcomp(node: lua_ast.ListCompNode) -> str:
+    result = initialise_string(node);
 
-    result = result + compile_comprehensions(listcomp_node.generators);
+    result = result + compile_comprehensions(node.generators, node);
 
+    return result;
+
+def compile_generatorexp(node: lua_ast.GeneratorExpNode) -> str:
+    result = initialise_string(node);
+
+    result = result + compile_comprehensions(node.generators, node);
+
+    return result;
+
+def compile_starred(node: lua_ast.StarredNode) -> str:
+    result = initialise_string(node);
+
+    result = result + "table.unpack("
+    result = result + compile_expression(node.value);
+    result = result + ")";
+    
     return result;
 
 def compile_statement(statement_node: lua_ast.StatementNode) -> str:
@@ -650,6 +686,10 @@ def compile_expression(expression_node: lua_ast.ExpressionNode) -> str:
         return compile_attribute(expression_node);
     elif isinstance(expression_node, lua_ast.ListCompNode):
         return compile_listcomp(expression_node);
+    elif isinstance(expression_node, lua_ast.GeneratorExpNode):
+        return compile_generatorexp(expression_node);
+    elif isinstance(expression_node, lua_ast.StarredNode):
+        return compile_starred(expression_node);
     
     raise Exception("Unknown expression node type during Lua AST -> Lua compilation " + str(type(expression_node)));
 

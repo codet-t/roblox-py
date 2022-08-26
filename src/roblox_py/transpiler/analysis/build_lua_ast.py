@@ -32,6 +32,8 @@ def map_functiondef(pynode: py_ast.FunctionDef, scope: LuaScope) -> lua_ast.Func
         pynode.lineno,
     );
 
+    scope.functions.append(new_function_node);
+    
     new_scope.node = new_function_node;
 
     new_function_node.scope = scope;
@@ -61,7 +63,7 @@ def map_assignment(pynode: py_ast.Assign, scope: LuaScope) -> lua_ast.Assignment
         if not isinstance(target, py_ast.Name):
             continue;
         
-        function_scope = scope.get_function()
+        function_scope = scope.get_function_scope()
         direct = function_scope == scope
 
         function_scope.add_variable(lua_ast.Variable(target.id, "nil", direct, target.lineno));
@@ -88,7 +90,7 @@ def map_if(pynode: py_ast.If, scope: LuaScope) -> lua_ast.IfNode:
         pynode.lineno,
     );
 
-    if not isinstance(pynode.orelse[0], py_ast.If):
+    if len(current_node.orelse) > 0 and not isinstance(pynode.orelse[0], py_ast.If):
         new_new_scope = scope.add_child(if_node);
         if_node.elsebody = map_statements(pynode.orelse, new_new_scope);
 
@@ -96,6 +98,8 @@ def map_if(pynode: py_ast.If, scope: LuaScope) -> lua_ast.IfNode:
     if_node.scope = scope;
 
     while True:
+        if len(current_node.orelse) == 0: break;
+
         if not isinstance(current_node.orelse[0], py_ast.If):
             break;
         
@@ -265,6 +269,8 @@ def map_argument(pynode: py_ast.arg, scope: LuaScope) -> lua_ast.ArgNode:
         pynode.lineno);
 
 def map_call(pynode: py_ast.Call, attributed_to: lua_ast.Node | None, scope: LuaScope) -> lua_ast.CallNode:
+    # get the FunctionNode by looping through the scope
+    # and finding the function that is called by pynode.func.name
     call_node: lua_ast.CallNode = lua_ast.CallNode(
         map_expression(pynode.func, scope),
         map_expressions(pynode.args, scope),
@@ -375,7 +381,7 @@ def map_yield(pynode: py_ast.Yield, scope: LuaScope) -> lua_ast.YieldNode:
 
     yield_node.scope = scope;
 
-    function_scope = scope.get_function()
+    function_scope = scope.get_function_scope()
 
     if function_scope.node is not None:
         function_scope.node.yields.append(value);
@@ -432,7 +438,7 @@ def map_comprehension(pynode: py_ast.comprehension, scope: LuaScope) -> lua_ast.
     line = None;
     if hasattr(pynode, "lineno"):
         line = pynode.lineno;
-
+    
     comprehension_node = lua_ast.ComprehensionNode(
         map_expression(pynode.target, scope),
         map_expression(pynode.iter, scope),
@@ -453,6 +459,32 @@ def map_listcomp(pynode: py_ast.ListComp, scope: LuaScope) -> lua_ast.ListCompNo
     new_node = lua_ast.ListCompNode(
         map_expression(pynode.elt, scope),
         generators,
+        pynode.lineno
+    );
+
+    new_node.scope = scope;
+
+    return new_node
+
+def map_generatorexp(pynode: py_ast.GeneratorExp, scope: LuaScope) -> lua_ast.GeneratorExpNode:
+    generators: List[lua_ast.ComprehensionNode] = [];
+
+    for generator in pynode.generators:
+        generators.append(map_comprehension(generator, scope));
+
+    new_node = lua_ast.GeneratorExpNode(
+        map_expression(pynode.elt, scope),
+        generators,
+        pynode.lineno
+    );
+
+    new_node.scope = scope;
+
+    return new_node
+
+def map_starred(pynode: py_ast.Starred, scope: LuaScope) -> lua_ast.StarredNode:
+    new_node = lua_ast.StarredNode(
+        map_expression(pynode.value, scope),
         pynode.lineno
     );
 
@@ -484,6 +516,10 @@ def map_expression(expression: py_ast.expr, scope: LuaScope) -> lua_ast.Expressi
         return map_attribute(expression, scope);
     elif isinstance(expression, py_ast.ListComp):
         return map_listcomp(expression, scope);
+    elif isinstance(expression, py_ast.GeneratorExp):
+        return map_generatorexp(expression, scope);
+    elif isinstance(expression, py_ast.Starred):
+        return map_starred(expression, scope);
 
     raise Exception("Unknown expression type " + str(type(expression)));
 

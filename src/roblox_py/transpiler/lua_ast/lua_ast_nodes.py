@@ -60,6 +60,11 @@ class ConstantNode(ExpressionNode):
         self.value = str(value)
         self.type = type
 
+class StarredNode(ExpressionNode):
+    def __init__(self, value: ExpressionNode, line_begin: int):
+        super().__init__(line_begin)
+        self.value = value
+
 class SliceNode(ExpressionNode):
     def __init__(self, subscript: Any, lower: ExpressionNode | None, upper: ExpressionNode | None, 
                 step: ExpressionNode | None, line_begin: int):
@@ -68,6 +73,7 @@ class SliceNode(ExpressionNode):
             self.lower = lower
             self.upper = upper
             self.step = step
+            
 class SubscriptNode(ExpressionNode):
     def __init__(self, value: ExpressionNode, slice: Any, line_begin: int):
         super().__init__(line_begin)
@@ -283,6 +289,12 @@ class ComprehensionNode(Node):
         self.conditions = conditions
 
 class ListCompNode(ExpressionNode):
+    def __init__(self, elt: ExpressionNode, generators: List[ComprehensionNode], line_begin: int):
+        super().__init__(line_begin)
+        self.elt = elt
+        self.generators = generators
+
+class GeneratorExpNode(ExpressionNode):
     def __init__(self, elt: ExpressionNode, generators: List[ComprehensionNode], line_begin: int):
         super().__init__(line_begin)
         self.elt = elt

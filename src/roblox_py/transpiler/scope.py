@@ -46,13 +46,14 @@ class LuaScope(Scope):
     def __init__(self,  scope_id: str,
                         node: Any,
                         parent: Self | None = None):
-        from .lua_ast.lua_ast_nodes import Variable as LuaVariable;
+        from .lua_ast.lua_ast_nodes import Variable as LuaVariable, FunctionNode as LuaFunction;
         super().__init__(scope_id, node);
         self.options: List[str] = [];
         self.variables: List[LuaVariable] = [];
         self.parent = parent;
+        self.functions: List[LuaFunction] = [];
 
-    def get_function(self) -> Self:
+    def get_function_scope(self) -> Self:
         from .lua_ast.lua_ast_nodes import FunctionNode as LuaFunction;
 
         if isinstance(self.node, LuaFunction):
@@ -74,7 +75,7 @@ class LuaScope(Scope):
     from .lua_ast.lua_ast_nodes import Variable as LuaVariable;
 
     def add_variable(self, variable: LuaVariable) -> None | Literal[True]:
-        function_scope = self.get_function();
+        function_scope = self.get_function_scope();
         
         # Make list of variable.names
         variable_names: List[str] = [];
@@ -101,6 +102,7 @@ class LuaScope(Scope):
         new_scope = LuaScope(new_id, node);
         new_scope.parent = self;
         new_scope.options = self.options;
+        new_scope.functions = self.functions;
 
         # If node is not None, set the node of the scope
         if node is not None: new_scope.node = node;
@@ -132,7 +134,7 @@ class PyScope(Scope):
         self.variables: List[PyVariableDict] = [];
         self.parent = parent;
 
-    def get_function(self) -> Self:
+    def get_function_scope(self) -> Self:
         def check_function(node: py_ast.stmt | py_ast.mod) -> bool:
             return (isinstance(node, py_ast.FunctionDef)
             or isinstance(node, py_ast.AsyncFunctionDef)
@@ -154,7 +156,7 @@ class PyScope(Scope):
         return ancestor;
 
     def add_variable(self, variable: PyVariableDict) -> None | Literal[True]:
-        function_scope = self.get_function();
+        function_scope = self.get_function_scope();
         
         # Make list of variable.names
         variable_names: List[str] = [];

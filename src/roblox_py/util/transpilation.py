@@ -45,7 +45,7 @@ builtin_functions = {
 
 top_block = Scope("0", "top", [], []);
 
-def get_function_block_by_name(name: str, within_block: Scope) -> Scope:
+def get_function_scope_block_by_name(name: str, within_block: Scope) -> Scope:
     # Loop through children of within_block, find the function with the same name
     for child in within_block.children:
         if child.type == "function" and child.node.name == name:
@@ -155,7 +155,7 @@ def transpile_call(node: ast.Call, block: Scope) -> str:
         # Reformulate help(function) to function([_,_,_,... (depending on #args) ],"help")
         func = node.args[0];
         # Get actual function from func (so we can get args length)
-        func = get_function_block_by_name(func.id, block).node
+        func = get_function_scope_block_by_name(func.id, block).node
         # Get amount of possible parameters
         num_args = len(func.args.args);
 
@@ -331,7 +331,6 @@ def transpile_assign(node: ast.Assign, block: Scope) -> str:
     targets = [];
     added: str = None # None | "surface" | "deep"
     variables_string = "";
-
     for i in range(0, len(node.targets)):
         node_target = node.targets[i]
         target = transpile_expression(node_target, block)
