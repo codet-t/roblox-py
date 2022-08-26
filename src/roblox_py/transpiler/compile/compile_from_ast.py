@@ -1,4 +1,3 @@
-from tkinter.messagebox import NO
 from typing import Dict, List
 
 import ast as py_ast
