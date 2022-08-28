@@ -117,6 +117,14 @@ class IfNode(StatementNode):
         self.elsebody = elsebody
         self.elseifbody = elseifbody
 
+class IfExpNode(ExpressionNode):
+    def __init__(self, condition: ExpressionNode, body: ExpressionNode,
+                elsebody: ExpressionNode, line_begin: int):
+        super().__init__(line_begin)
+        self.condition = condition
+        self.body = body
+        self.elsebody = elsebody
+
 class NameNode(ExpressionNode):
     def __init__(self, name: str, line_begin: int):
         super().__init__(line_begin)
@@ -174,6 +182,34 @@ class CompareNode(ExpressionNode):
         self.left = left
         self.operators = operators
         self.comparators = comparators
+
+class UnaryOperatorNode(ExpressionNode):
+    def __init__(self, value: str, line_begin: int, parenthesis: bool = False):
+        super().__init__(line_begin)
+        self.value = value
+        self.parenthesis = parenthesis
+
+class UnaryOperationNode(ExpressionNode):
+    def __init__(self, operator: UnaryOperatorNode, value: ExpressionNode, line_begin: int):
+        super().__init__(line_begin)
+        self.operator = operator
+        self.value = value
+
+class UnaryAddNode(UnaryOperatorNode):
+    def __init__(self):
+        super().__init__('+', False)
+
+class UnarySubNode(UnaryOperatorNode):
+    def __init__(self):
+        super().__init__('-', False)
+
+class UnaryNotNode(UnaryOperatorNode):
+    def __init__(self):
+        super().__init__('not ', False)
+
+class UnaryInvertNode(UnaryOperatorNode):
+    def __init__(self):
+        super().__init__('~', False)
 
 class OperatorNode(ExpressionNode):
     def __init__(self, value: str, line_begin: int, parenthesis: bool = False):
@@ -298,4 +334,11 @@ class GeneratorExpNode(ExpressionNode):
     def __init__(self, elt: ExpressionNode, generators: List[ComprehensionNode], line_begin: int):
         super().__init__(line_begin)
         self.elt = elt
+        self.generators = generators
+
+class DictCompNode(ExpressionNode):
+    def __init__(self, elt: ExpressionNode, key: ExpressionNode, generators: List[ComprehensionNode], line_begin: int):
+        super().__init__(line_begin)
+        self.elt = elt
+        self.key = key
         self.generators = generators

@@ -49,6 +49,35 @@ def map_functiondef(pynode: py_ast.FunctionDef, scope: LuaScope) -> lua_ast.Func
 
     return new_function_node;
 
+def map_lambda(pynode: py_ast.Lambda, scope: LuaScope) -> lua_ast.FunctionNode:
+    new_scope = scope.add_child(None);
+    
+    new_function_node = lua_ast.FunctionNode(
+        None,
+        [],
+        [],
+        [],
+        None,
+        True,
+        [],
+        [],
+        pynode.lineno,
+    );
+
+    scope.functions.append(new_function_node);
+    
+    new_scope.node = new_function_node;
+
+    new_function_node.scope = scope;
+
+    return_annotation: lua_ast.ExpressionNode | None = None;
+
+    new_function_node.return_annotation = return_annotation;
+    new_function_node.args = map_arguments(pynode.args, new_scope);
+    new_function_node.body = [map_expression(pynode.body, new_scope)]
+
+    return new_function_node;
+
 def map_arguments(pynode: py_ast.arguments, scope: LuaScope) -> List[lua_ast.ArgNode]:
     arguments: List[lua_ast.ArgNode] = [];
 
@@ -66,7 +95,10 @@ def map_assignment(pynode: py_ast.Assign, scope: LuaScope) -> lua_ast.Assignment
         function_scope = scope.get_function_scope()
         direct = function_scope == scope
 
-        function_scope.add_variable(lua_ast.Variable(target.id, "nil", direct, target.lineno));
+        var_node = lua_ast.Variable(target.id, "nil", direct, target.lineno);
+        function_scope.add_variable(var_node);
+        if isinstance(target, py_ast.Lambda):
+            var_node.type = "function";
         
     assignment_node = lua_ast.AssignmentNode(
         map_expressions(pynode.targets, scope), 
@@ -119,6 +151,21 @@ def map_if(pynode: py_ast.If, scope: LuaScope) -> lua_ast.IfNode:
         if_node.elseifbody.append(elseif_node);
 
     return if_node;
+
+def map_ifexp(pynode: py_ast.IfExp, scope: LuaScope) -> lua_ast.IfExpNode:
+    new_scope = scope.add_child(None);
+
+    ifexp_node = lua_ast.IfExpNode(
+        map_expression(pynode.test, new_scope),
+        map_expression(pynode.body, new_scope),
+        map_expression(pynode.orelse, new_scope),
+        pynode.lineno,
+    );
+
+    new_scope.node = ifexp_node;
+    ifexp_node.scope = scope;
+
+    return ifexp_node;
 
 def map_return(pynode: py_ast.Return, scope: LuaScope) -> lua_ast.ReturnNode:
     returns: lua_ast.ExpressionNode | None = None;
@@ -348,6 +395,8 @@ def map_subscript(pynode: py_ast.Subscript, scope: LuaScope) -> lua_ast.Subscrip
         new_subscript_node.slice = map_slice(pynode.slice, new_subscript_node, scope);
     elif isinstance(pynode.slice, py_ast.Name):
         new_subscript_node.slice = map_name(pynode.slice, scope);
+    elif isinstance(pynode.slice, py_ast.Constant):
+        new_subscript_node.slice = map_constant(pynode.slice, scope);
     else:
         raise Exception("Unknown slice type " + str(type(pynode.slice)));
     
@@ -482,9 +531,50 @@ def map_generatorexp(pynode: py_ast.GeneratorExp, scope: LuaScope) -> lua_ast.Ge
 
     return new_node
 
+def map_dictcomp(pynode: py_ast.DictComp, scope: LuaScope) -> lua_ast.DictCompNode:
+    generators: List[lua_ast.ComprehensionNode] = [];
+
+    for generator in pynode.generators:
+        generators.append(map_comprehension(generator, scope));
+
+    new_node = lua_ast.DictCompNode(
+        map_expression(pynode.value, scope),
+        map_expression(pynode.key, scope),
+        generators,
+        pynode.lineno
+    );
+
+    new_node.scope = scope;
+
+    return new_node
+
 def map_starred(pynode: py_ast.Starred, scope: LuaScope) -> lua_ast.StarredNode:
     new_node = lua_ast.StarredNode(
         map_expression(pynode.value, scope),
+        pynode.lineno
+    );
+
+    new_node.scope = scope;
+
+    return new_node
+
+
+def map_unaryoperator(pynode: py_ast.unaryop, scope: LuaScope) -> lua_ast.UnaryOperatorNode:
+    if isinstance(pynode, py_ast.Invert):
+        return lua_ast.UnaryInvertNode();
+    elif isinstance(pynode, py_ast.Not):
+        return lua_ast.UnaryNotNode();
+    elif isinstance(pynode, py_ast.UAdd):
+        return lua_ast.UnaryAddNode();
+    elif isinstance(pynode, py_ast.USub):
+        return lua_ast.UnarySubNode();
+
+    raise Exception("Unknown operator " + str(type(pynode)));
+
+def map_unaryoperation(pynode: py_ast.UnaryOp, scope: LuaScope) -> lua_ast.UnaryOperationNode:
+    new_node = lua_ast.UnaryOperationNode(
+        map_unaryoperator(pynode.op, scope),
+        map_expression(pynode.operand, scope),
         pynode.lineno
     );
 
@@ -518,8 +608,16 @@ def map_expression(expression: py_ast.expr, scope: LuaScope) -> lua_ast.Expressi
         return map_listcomp(expression, scope);
     elif isinstance(expression, py_ast.GeneratorExp):
         return map_generatorexp(expression, scope);
+    elif isinstance(expression, py_ast.DictComp):
+        return map_dictcomp(expression, scope);
     elif isinstance(expression, py_ast.Starred):
         return map_starred(expression, scope);
+    elif isinstance(expression, py_ast.UnaryOp):
+        return map_unaryoperation(expression, scope);
+    elif isinstance(expression, py_ast.Lambda):
+        return map_lambda(expression, scope); # type: ignore
+    elif isinstance(expression, py_ast.IfExp):
+        return map_ifexp(expression, scope);
 
     raise Exception("Unknown expression type " + str(type(expression)));
 

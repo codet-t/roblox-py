@@ -48,10 +48,22 @@ def initialise_string(node: lua_ast.Node) -> str:
     
     return result;
 
+def close_parenthesis(result: str, node: lua_ast.Node) -> str:
+    if "\n" in result:
+        return result + "\n" + node.scope.get_offset() + ")";
+    else:
+        return result + ")";
+
+def parse_string(result: str) -> str:
+    if "\n" in result:
+        return "[[" + result + "]]";
+    else:
+        return '"' + result + '"';
+
 def compile_if(node: lua_ast.IfNode):
     result = initialise_string(node);
 
-    result = result + "if " + compile_expression(node.condition) + " then\n";
+    result = result + "if ropy.evaluate(" + compile_expression(node.condition) + ") then\n";
     result = result + compile_lines(node.body);
 
     if len(node.elseifbody) > 0:
@@ -68,6 +80,18 @@ def compile_if(node: lua_ast.IfNode):
         result = result + compile_lines(node.elsebody);
 
     result = result + node.scope.get_offset() + "end";
+
+    return result;
+
+def compile_ifexp(ifexp_node: lua_ast.IfExpNode) -> str:
+    result = initialise_string(ifexp_node);
+
+    # a if b else c
+    # =>
+    # b and a or c
+
+    result = result + "(" + compile_expression(ifexp_node.condition) + " and " + compile_expression(ifexp_node.body) + " or " + compile_expression(ifexp_node.elsebody);
+    result = close_parenthesis(result, ifexp_node);
 
     return result;
 
@@ -95,10 +119,13 @@ def compile_function(node: lua_ast.FunctionNode) -> str:
 
     result = result + ")\n";
 
-    if has_help:
-        result = result + node.scope.get_offset(1) + 'if _ropy_help == "help" then return "' + node.body[0].value + '" end\n'
-        # Remove first object from node.body
-        node.body.pop(0);
+    if node.is_lambda:
+        result = result + node.scope.get_offset(1) + "return";
+    else:
+        if has_help:
+            result = result + node.scope.get_offset(1) + 'if _ropy_help == "help" then print(' + parse_string(node.body[0].value) + '); return nil; end\n'
+            # Remove first object from node.body
+            node.body.pop(0);
 
     if len(node.yields) > 0:
         # we have to do offset=1 because the node.scope technically begins at the function line
@@ -132,7 +159,7 @@ def compile_constant(constant_node: lua_ast.ConstantNode) -> str:
         if constant_node.value in script_options:
             result = result + "-- " + constant_node.value
         else:
-            result = result + "\"" + constant_node.value + "\"";
+            result = result + parse_string(constant_node.value);
     else:
         result = result + constant_node.value;
 
@@ -397,6 +424,9 @@ def compile_subscript(subscript_node: lua_ast.SubscriptNode) -> str:
     else:
         result = result + "nil";
 
+    if "@ropy:ignore_table_offset" in subscript_node.scope.options:
+        result = result + ", true";
+
     result = result + ")";
 
     return result;
@@ -405,6 +435,19 @@ def compile_binop(binop_node: lua_ast.BinOpNode) -> str:
     result = initialise_string(binop_node);
 
     parenthesis = binop_node.operator.parenthesis;
+
+    if isinstance(binop_node.operator, lua_ast.AddNode):
+        if isinstance(binop_node.left, lua_ast.TableNode):
+            result = result + "ropy.concat." + binop_node.left.type + "(" + compile_expression(binop_node.left) + ", " + compile_expression(binop_node.right) + ")";
+            return result;
+        elif isinstance(binop_node.left, lua_ast.CallNode):
+            result = result + "ropy.concat.list(" + compile_expression(binop_node.left) + ", " + compile_expression(binop_node.right) + ")";
+            return result;
+        elif isinstance(binop_node.left, lua_ast.BinOpNode):
+            result = result + "ropy.concat.list(" + compile_binop(binop_node.left) + ", " + compile_expression(binop_node.right) + ")";
+            return result;
+        # else:
+            # raise Exception("Tried to add non-table (as far as compiler is concerned: " + binop_node.left.__class__.__name__ + ") to table");
 
     if parenthesis:
         result = result + binop_node.operator.value + "(";
@@ -437,6 +480,8 @@ def compile_assignment(assignment_node: lua_ast.AssignmentNode) -> str:
                 if v.name == target.name and not v.administred:
                     result = result + "local ";
                     v.administred = True;
+                    if isinstance(assignment_node.value, lua_ast.FunctionNode):
+                        result = result + compile_expression(target) + ";\n"
                     break;
 
         result = result + compile_expression(target);
@@ -558,13 +603,13 @@ def compile_augmentedassignment(node: lua_ast.AugmentedAssignmentNode) -> str:
     return result;
 
 def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode],
-    complimentary_nodes: lua_ast.ListCompNode | lua_ast.GeneratorExpNode ) -> str:
+    complimentary_nodes: lua_ast.ListCompNode | lua_ast.GeneratorExpNode | lua_ast.DictCompNode ) -> str:
     result = "";
     layers: int = 1;
 
     result = result + initialise_string(complimentary_nodes);
 
-    result = result + complimentary_nodes.scope.get_offset(0) + "(function()\n"
+    result = result + "(function()\n"
     result = result + complimentary_nodes.scope.get_offset(layers) + "local result = {}\n"
 
     for i in range(0, len(comprehensions_nodes)):
@@ -584,13 +629,13 @@ def compile_comprehensions(comprehensions_nodes: List[lua_ast.ComprehensionNode]
             result = result + comprehension_node.scope.get_offset(layers) + "if ";
 
             if length == 1:
-                result = result + compile_expression(comprehension_node.conditions[0]);
+                result = result + "ropy.evaluate(" + compile_expression(comprehension_node.conditions[0]) + ")";
             else:
-                result = result + "(";
+                result = result + "("
+                result = result + "ropy.evaluate(";
                 for j in range(0, length):
                     condition = comprehension_node.conditions[j];
 
-                    result = result + "("
                     result = result + compile_expression(condition);
                     result = result + ")"
                     
@@ -633,12 +678,27 @@ def compile_generatorexp(node: lua_ast.GeneratorExpNode) -> str:
 
     return result;
 
+def compile_dictcomp(node: lua_ast.DictCompNode) -> str:
+    result = initialise_string(node);
+
+    result = result + compile_comprehensions(node.generators, node);
+
+    return result;
+
 def compile_starred(node: lua_ast.StarredNode) -> str:
     result = initialise_string(node);
 
     result = result + "table.unpack("
     result = result + compile_expression(node.value);
     result = result + ")";
+    
+    return result;
+
+def compile_unaryoperation(node: lua_ast.UnaryOperationNode) -> str:
+    result = initialise_string(node);
+
+    result = result + node.operator.value;
+    result = result + compile_expression(node.value);
     
     return result;
 
@@ -687,8 +747,16 @@ def compile_expression(expression_node: lua_ast.ExpressionNode) -> str:
         return compile_listcomp(expression_node);
     elif isinstance(expression_node, lua_ast.GeneratorExpNode):
         return compile_generatorexp(expression_node);
+    elif isinstance(expression_node, lua_ast.DictCompNode):
+        return compile_dictcomp(expression_node);
     elif isinstance(expression_node, lua_ast.StarredNode):
         return compile_starred(expression_node);
+    elif isinstance(expression_node, lua_ast.UnaryOperationNode):
+        return compile_unaryoperation(expression_node);
+    elif isinstance(expression_node, lua_ast.FunctionNode):
+        return compile_function(expression_node);
+    elif isinstance(expression_node, lua_ast.IfExpNode):
+        return compile_ifexp(expression_node);
     
     raise Exception("Unknown expression node type during Lua AST -> Lua compilation " + str(type(expression_node)));
 

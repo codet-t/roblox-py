@@ -170,12 +170,13 @@ ropy.all.tuple = ropy.all.list
 ropy.all.set = ropy.all.list
 
 ropy.slice = {
-	list = function(pytable, start, stop, step)
-		-- Replicate python's slice(start, stop, step) behaviour
+	list = function(pytable, start, stop, step, ignore_offset)
+		-- Replicate python's slice(start, step, stop) behaviour
 		
+		if ignore_offset == nil then ignore_offset = false end
 		if step == nil then step = 1 end
 		if stop == nil then stop = #pytable end
-		if start == nil then start = 1 end
+		if start == nil then start = 1 else start = start + 1 end
 
 		if start < 0 then start = #pytable + start end
 		if stop < 0 then stop = #pytable + stop end
@@ -183,21 +184,19 @@ ropy.slice = {
 		if start > stop then return {} end
 		if step == 0 then return {} end
 
-		if step > 1 then
-			local result = {}
+		local result = {}
+
+		if step > 0 then
 			for i = start, stop, step do
 				table.insert(result, pytable[i])
 			end
-			return result
-		elseif step < 1 then
-			local result = {}
+		else
 			for i = stop, start, step do
 				table.insert(result, pytable[i])
 			end
-			return result
-		else
-			return ropy.range(start, stop)
 		end
+
+		return result
 	end,
 
 	error = function()
