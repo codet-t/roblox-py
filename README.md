@@ -1,6 +1,10 @@
 [![Discord](https://img.shields.io/discord/1007801454943289354?label=Discord&style=flat&logo=discord)](https://discord.gg/mkC9PJqxkB)
 [![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/codetariat/roblox-py.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/codetariat/roblox-py/context:python)
 
+# Repository Archived
+
+I will probably not be working on roblox-py for a long time to come, for this reason I have decided to archive the repostiory.
+
 # roblox-py
 Python to Luau compiler. Please note that before this project was created, I had never used Python nor do I have any experience with compiling programming languages and this is just a fun side project for me so please don't mind shoddy code.
 
